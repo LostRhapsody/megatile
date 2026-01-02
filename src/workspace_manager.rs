@@ -1,7 +1,9 @@
 use super::workspace::{Monitor, Window};
+use crate::tiling::DwindleTiler;
 use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
 use std::sync::{Arc, Mutex};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub struct WorkspaceManager {
     monitors: Arc<Mutex<Vec<Monitor>>>,
@@ -203,6 +205,49 @@ impl WorkspaceManager {
             Ok(())
         } else {
             Err("Window not found".to_string())
+        }
+    }
+
+    pub fn tile_active_workspaces(&self) {
+        let tiler = DwindleTiler::default();
+        let mut monitors = self.monitors.lock().unwrap();
+
+        for monitor in monitors.iter_mut() {
+            let workspace_idx = (monitor.active_workspace - 1) as usize;
+
+            if !monitor.workspaces[workspace_idx].windows.is_empty() {
+                // Create a copy of the monitor for reading
+                let monitor_copy = monitor.clone();
+                let windows = &mut monitor.workspaces[workspace_idx].windows;
+                tiler.tile_windows(&monitor_copy, windows);
+            }
+        }
+    }
+
+    pub fn apply_window_positions(&self) {
+        let monitors = self.monitors.lock().unwrap();
+
+        for monitor in monitors.iter() {
+            let active_workspace = monitor.get_active_workspace();
+
+            for window in &active_workspace.windows {
+                self.set_window_position(window.hwnd, &window.rect);
+            }
+        }
+    }
+
+    fn set_window_position(&self, hwnd: HWND, rect: &RECT) {
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                None,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .ok();
         }
     }
 }

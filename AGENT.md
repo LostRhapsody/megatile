@@ -3,7 +3,7 @@
 ## Project Status
 
 **Phase**: Implementation in Progress
-**Next Action**: Complete STEP_6: Dwindle tiling algorithm
+**Next Action**: Begin STEP_7: Focus movement
 
 ## Project Notes
 
@@ -18,7 +18,7 @@ MegaTile is a fast, lightweight, opinionated tiling window manager for Windows b
 - ✅ Documentation created (README.md, PLAN.md, STEP_1 through STEP_16)
 - ✅ Architecture planned
 - ✅ Dependencies identified
-- ✅ Implementation started (STEP_6)
+- ✅ Implementation in progress (STEP_6 complete)
 
 ## File Structure
 
@@ -272,7 +272,7 @@ Completed steps:
 - [x] STEP_3: Global hotkey registration
 - [x] STEP_4: Workspace data structures
 - [x] STEP_5: Window hiding/showing
-- [ ] STEP_6: Dwindle tiling algorithm
+- [x] STEP_6: Dwindle tiling algorithm
 - [ ] STEP_7: Focus movement
 - [ ] STEP_8: Window movement
 - [ ] STEP_9: Workspace switching

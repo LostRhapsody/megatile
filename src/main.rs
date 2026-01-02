@@ -4,6 +4,7 @@
 )]
 
 mod hotkeys;
+mod tiling;
 mod tray;
 mod windows_lib;
 mod workspace;
@@ -65,6 +66,14 @@ fn main() {
     }
 
     println!("Assigned all windows to workspace 1");
+
+    // Apply initial tiling
+    {
+        let wm = workspace_manager.lock().unwrap();
+        wm.tile_active_workspaces();
+        wm.apply_window_positions();
+    }
+    println!("Applied initial tiling to workspace 1");
 
     // Initialize tray icon
     let tray = TrayManager::new().expect("Failed to create tray icon");
@@ -136,7 +145,12 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
         hotkeys::HotkeyAction::SwitchWorkspace(num) => {
             let mut wm = workspace_manager.lock().unwrap();
             match wm.switch_workspace_with_windows(num) {
-                Ok(()) => println!("Switched to workspace {}", num),
+                Ok(()) => {
+                    println!("Switched to workspace {}", num);
+                    // Tile and apply positions for new workspace
+                    wm.tile_active_workspaces();
+                    wm.apply_window_positions();
+                }
                 Err(e) => eprintln!("Failed to switch workspace: {}", e),
             }
         }
