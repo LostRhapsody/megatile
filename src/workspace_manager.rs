@@ -3,7 +3,7 @@ use crate::tiling::DwindleTiler;
 use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
 
 pub struct WorkspaceManager {
     monitors: Arc<Mutex<Vec<Monitor>>>,
@@ -250,6 +250,108 @@ impl WorkspaceManager {
             .ok();
         }
     }
+
+    pub fn get_focused_window(&self) -> Option<Window> {
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            self.get_window(hwnd)
+        }
+    }
+
+    pub fn move_focus(&self, direction: FocusDirection) -> Result<(), String> {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+
+        let focused = self.get_focused_window();
+
+        // Find all windows in active workspace on all monitors
+        let mut active_windows: Vec<(Window, RECT)> = Vec::new();
+        let monitors = self.monitors.lock().unwrap();
+
+        for monitor in monitors.iter() {
+            let active_workspace = monitor.get_active_workspace();
+            for window in &active_workspace.windows {
+                active_windows.push((window.clone(), window.rect));
+            }
+        }
+
+        if active_windows.is_empty() {
+            return Ok(()); // No windows to focus
+        }
+
+        let target = if let Some(focused) = focused {
+            // Find window to move focus to based on direction
+            self.find_next_focus(&focused, direction, &active_windows)
+        } else {
+            // No window focused, focus the first window
+            active_windows.first().map(|(w, _)| w.clone())
+        };
+
+        if let Some(target_window) = target {
+            self.set_window_focus(target_window.hwnd);
+        }
+
+        Ok(())
+    }
+
+    fn find_next_focus(
+        &self,
+        focused: &Window,
+        direction: FocusDirection,
+        windows: &[(Window, RECT)],
+    ) -> Option<Window> {
+        let focused_rect = focused.rect;
+
+        let candidates: Vec<&(Window, RECT)> = windows
+            .iter()
+            .filter(|(w, _)| w.hwnd != focused.hwnd)
+            .collect();
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Find the best candidate based on direction
+        match direction {
+            FocusDirection::Left => candidates
+                .iter()
+                .filter(|(_, rect)| rect.right < focused_rect.left)
+                .min_by_key(|(_, rect)| focused_rect.left - rect.right)
+                .map(|(w, _)| w.clone()),
+            FocusDirection::Right => candidates
+                .iter()
+                .filter(|(_, rect)| rect.left > focused_rect.right)
+                .min_by_key(|(_, rect)| rect.left - focused_rect.right)
+                .map(|(w, _)| w.clone()),
+            FocusDirection::Up => candidates
+                .iter()
+                .filter(|(_, rect)| rect.bottom < focused_rect.top)
+                .min_by_key(|(_, rect)| focused_rect.top - rect.bottom)
+                .map(|(w, _)| w.clone()),
+            FocusDirection::Down => candidates
+                .iter()
+                .filter(|(_, rect)| rect.top > focused_rect.bottom)
+                .min_by_key(|(_, rect)| rect.top - focused_rect.bottom)
+                .map(|(w, _)| w.clone()),
+        }
+    }
+
+    fn set_window_focus(&self, hwnd: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+
+        unsafe {
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FocusDirection {
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
 impl Default for WorkspaceManager {
