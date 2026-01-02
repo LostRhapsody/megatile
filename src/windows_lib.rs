@@ -1,6 +1,11 @@
 use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE};
+use windows::Win32::Graphics::Gdi::{
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
+
+const MONITORINFOF_PRIMARY: u32 = 1;
 
 pub struct WindowInfo {
     pub hwnd: HWND,
@@ -107,4 +112,51 @@ pub fn get_normal_windows() -> Vec<WindowInfo> {
         .into_iter()
         .filter(|w| is_normal_window(w.hwnd, &w.class_name, &w.title))
         .collect()
+}
+
+pub struct MonitorInfo {
+    pub hmonitor: isize,
+    pub rect: RECT,
+    pub is_primary: bool,
+}
+
+pub fn enumerate_monitors() -> Vec<MonitorInfo> {
+    let mut monitors = Vec::new();
+
+    unsafe extern "system" fn enum_monitors_proc(
+        hmonitor: HMONITOR,
+        _hdc: HDC,
+        _lprect: *mut RECT,
+        lparam: LPARAM,
+    ) -> BOOL {
+        unsafe {
+            let monitors = &mut *(lparam.0 as *mut Vec<MonitorInfo>);
+
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+
+            if GetMonitorInfoW(hmonitor, &mut info).as_bool() {
+                monitors.push(MonitorInfo {
+                    hmonitor: hmonitor.0 as isize,
+                    rect: info.rcMonitor,
+                    is_primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
+                });
+            }
+
+            TRUE
+        }
+    }
+
+    unsafe {
+        let _ = EnumDisplayMonitors(
+            Some(HDC::default()),
+            None,
+            Some(enum_monitors_proc),
+            LPARAM(&mut monitors as *mut _ as isize),
+        );
+    }
+
+    monitors
 }

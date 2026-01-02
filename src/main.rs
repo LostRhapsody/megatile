@@ -6,14 +6,19 @@
 mod hotkeys;
 mod tray;
 mod windows_lib;
+mod workspace;
+mod workspace_manager;
 
 use hotkeys::HotkeyManager;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tray::TrayManager;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::PCWSTR;
+use windows_lib::{enumerate_monitors, get_normal_windows};
+use workspace_manager::WorkspaceManager;
 
 static CLASS_NAME: [u16; 22] = [
     77, 101, 103, 97, 84, 105, 108, 101, 77, 101, 115, 115, 97, 103, 101, 87, 105, 110, 100, 111,
@@ -23,6 +28,28 @@ static TITLE: [u16; 9] = [77, 101, 103, 97, 84, 105, 108, 101, 0];
 
 fn main() {
     println!("MegaTile - Window Manager");
+
+    // Initialize workspace manager
+    let workspace_manager = Arc::new(Mutex::new(WorkspaceManager::new()));
+
+    // Enumerate monitors and create monitor structs
+    let monitor_infos = enumerate_monitors();
+    println!("Found {} monitor(s):", monitor_infos.len());
+
+    let monitors: Vec<workspace::Monitor> = monitor_infos
+        .iter()
+        .enumerate()
+        .map(|(i, info)| {
+            println!("  Monitor {}: {:?}", i + 1, info.rect);
+            workspace::Monitor::new(info.hmonitor, info.rect)
+        })
+        .collect();
+
+    workspace_manager.lock().unwrap().set_monitors(monitors);
+
+    // Enumerate windows
+    let normal_windows = get_normal_windows();
+    println!("Found {} normal windows", normal_windows.len());
 
     // Initialize tray icon
     let tray = TrayManager::new().expect("Failed to create tray icon");
@@ -56,8 +83,7 @@ fn main() {
                 if msg.message == WM_HOTKEY {
                     let action = hotkey_manager.get_action(msg.wParam.0 as i32);
                     if let Some(action) = action {
-                        println!("Hotkey pressed: {:?}", action);
-                        // TODO: Handle hotkey action
+                        handle_hotkey(action, &workspace_manager);
                     }
                 } else if msg.message == WM_DESTROY {
                     PostQuitMessage(0);
@@ -66,6 +92,21 @@ fn main() {
         }
 
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<WorkspaceManager>>) {
+    match action {
+        hotkeys::HotkeyAction::SwitchWorkspace(num) => {
+            let mut wm = workspace_manager.lock().unwrap();
+            if wm.switch_workspace(num) {
+                println!("Switched to workspace {}", num);
+            }
+        }
+        _ => {
+            println!("Hotkey action: {:?}", action);
+            // TODO: Implement other actions in future steps
+        }
     }
 }
 
