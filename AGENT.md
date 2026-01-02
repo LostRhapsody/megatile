@@ -5,6 +5,10 @@
 **Phase**: Planning Complete
 **Next Action**: Begin Implementation (STEP_3)
 
+## Project Notes
+
+**Cargo.toml**: It's DONE! Don't change the Rust edition, windows dependencies, or features.
+
 ## Project Overview
 
 MegaTile is a fast, lightweight, opinionated tiling window manager for Windows built in Rust. It uses the Windows API directly for maximum performance and minimal dependencies.
