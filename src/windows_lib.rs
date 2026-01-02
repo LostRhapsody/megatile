@@ -1,0 +1,110 @@
+use windows::core::BOOL;
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE};
+use windows::Win32::UI::WindowsAndMessaging::*;
+
+pub struct WindowInfo {
+    pub hwnd: HWND,
+    pub title: String,
+    pub class_name: String,
+    pub rect: RECT,
+    pub is_visible: bool,
+    pub is_minimized: bool,
+}
+
+pub fn enumerate_windows() -> Vec<WindowInfo> {
+    let mut windows = Vec::new();
+
+    unsafe {
+        let lparam = LPARAM(&mut windows as *mut _ as isize);
+        let _ = EnumWindows(Some(enum_windows_proc), lparam);
+    }
+
+    windows
+}
+
+unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let windows = unsafe { &mut *(lparam.0 as *mut Vec<WindowInfo>) };
+
+    let mut title_buffer = [0u16; 256];
+    let length = unsafe { GetWindowTextW(hwnd, &mut title_buffer) };
+    let title = String::from_utf16_lossy(&title_buffer[..length as usize]);
+
+    let mut class_buffer = [0u16; 256];
+    let class_len = unsafe { GetClassNameW(hwnd, &mut class_buffer) };
+    let class_name = String::from_utf16_lossy(&class_buffer[..class_len as usize]);
+
+    let mut rect = RECT::default();
+    unsafe {
+        let _ = GetWindowRect(hwnd, &mut rect);
+    }
+
+    let is_visible = unsafe { IsWindowVisible(hwnd).as_bool() };
+
+    let is_minimized = unsafe { IsIconic(hwnd).as_bool() };
+
+    windows.push(WindowInfo {
+        hwnd,
+        title,
+        class_name,
+        rect,
+        is_visible,
+        is_minimized,
+    });
+
+    TRUE
+}
+
+pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
+    unsafe {
+        if !IsWindowVisible(hwnd).as_bool() {
+            return false;
+        }
+
+        if IsIconic(hwnd).as_bool() {
+            return false;
+        }
+
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+
+        if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
+            return false;
+        }
+
+        if ex_style & WS_EX_NOACTIVATE.0 != 0 {
+            return false;
+        }
+
+        let system_classes = [
+            "Shell_TrayWnd",
+            "Shell_SecondaryTrayWnd",
+            "Shell_traywnd",
+            "WorkerW",
+            "Progman",
+            "DV2ControlHost",
+            "XamlExplorerHostIslandWindow",
+        ];
+
+        for sys_class in &system_classes {
+            if class_name.eq_ignore_ascii_case(sys_class) {
+                return false;
+            }
+        }
+
+        if ex_style & WS_EX_APPWINDOW.0 != 0 {
+            return true;
+        }
+
+        if !title.trim().is_empty() {
+            return true;
+        }
+
+        false
+    }
+}
+
+pub fn get_normal_windows() -> Vec<WindowInfo> {
+    enumerate_windows()
+        .into_iter()
+        .filter(|w| is_normal_window(w.hwnd, &w.class_name, &w.title))
+        .collect()
+}
