@@ -53,7 +53,7 @@ MegaTile is a minimalist tiling window manager built with Rust that uses the Win
 
 ## Status
 
-**Development Phase**: Planning
+**Development Phase**: Implementation (STEP_6)
 
 See [PLAN.md](PLAN.md) for the implementation roadmap.
 
