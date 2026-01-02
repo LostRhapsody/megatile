@@ -17,7 +17,7 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows_lib::{enumerate_monitors, get_normal_windows};
+use windows_lib::{enumerate_monitors, get_normal_windows, show_window_in_taskbar};
 use workspace_manager::WorkspaceManager;
 
 static CLASS_NAME: [u16; 22] = [
@@ -47,9 +47,24 @@ fn main() {
 
     workspace_manager.lock().unwrap().set_monitors(monitors);
 
-    // Enumerate windows
+    // Enumerate windows and assign to workspace 1
     let normal_windows = get_normal_windows();
     println!("Found {} normal windows", normal_windows.len());
+
+    {
+        let wm = workspace_manager.lock().unwrap();
+        for window_info in normal_windows {
+            let window = workspace::Window::new(
+                window_info.hwnd,
+                1, // Assign to workspace 1
+                0, // TODO: Determine which monitor
+                window_info.rect,
+            );
+            wm.add_window(window);
+        }
+    }
+
+    println!("Assigned all windows to workspace 1");
 
     // Initialize tray icon
     let tray = TrayManager::new().expect("Failed to create tray icon");
@@ -69,6 +84,7 @@ fn main() {
     loop {
         if tray.should_exit() {
             println!("Exiting MegaTile...");
+            cleanup_on_exit(&workspace_manager);
             hotkey_manager.unregister_all(hwnd);
             break;
         }
@@ -95,17 +111,41 @@ fn main() {
     }
 }
 
+fn cleanup_on_exit(workspace_manager: &Arc<Mutex<WorkspaceManager>>) {
+    println!("Restoring all hidden windows...");
+    let wm = workspace_manager.lock().unwrap();
+    let monitors = wm.get_monitors();
+
+    for monitor in monitors {
+        for workspace_num in 1..=9 {
+            if let Some(workspace) = monitor.get_workspace(workspace_num) {
+                for window in &workspace.windows {
+                    // Show all windows regardless of current workspace
+                    if let Err(e) = show_window_in_taskbar(window.hwnd) {
+                        eprintln!("Failed to restore window {:?}: {}", window.hwnd, e);
+                    }
+                }
+            }
+        }
+    }
+    println!("Window restoration complete.");
+}
+
 fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<WorkspaceManager>>) {
     match action {
         hotkeys::HotkeyAction::SwitchWorkspace(num) => {
             let mut wm = workspace_manager.lock().unwrap();
-            if wm.switch_workspace(num) {
-                println!("Switched to workspace {}", num);
+            match wm.switch_workspace_with_windows(num) {
+                Ok(()) => println!("Switched to workspace {}", num),
+                Err(e) => eprintln!("Failed to switch workspace: {}", e),
             }
+        }
+        hotkeys::HotkeyAction::MoveToWorkspace(num) => {
+            // TODO: Get currently focused window
+            println!("Move to workspace {} (not yet implemented)", num);
         }
         _ => {
             println!("Hotkey action: {:?}", action);
-            // TODO: Implement other actions in future steps
         }
     }
 }

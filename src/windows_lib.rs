@@ -114,6 +114,57 @@ pub fn get_normal_windows() -> Vec<WindowInfo> {
         .collect()
 }
 
+pub fn hide_window_from_taskbar(hwnd: HWND) -> Result<(), String> {
+    unsafe {
+        // Store original window placement
+        let mut placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+
+        if GetWindowPlacement(hwnd, &mut placement).is_ok() {
+            // Hide the window
+            let _ = ShowWindow(hwnd, SW_HIDE);
+
+            // Remove from taskbar by temporarily removing WS_EX_APPWINDOW
+            let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            SetWindowLongW(hwnd, GWL_EXSTYLE, (ex_style & !WS_EX_APPWINDOW.0) as i32);
+
+            Ok(())
+        } else {
+            Err("Failed to get window placement".to_string())
+        }
+    }
+}
+
+pub fn show_window_in_taskbar(hwnd: HWND) -> Result<(), String> {
+    unsafe {
+        // Restore WS_EX_APPWINDOW to show in taskbar
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        SetWindowLongW(hwnd, GWL_EXSTYLE, (ex_style | WS_EX_APPWINDOW.0) as i32);
+
+        // Show the window
+        let _ = ShowWindow(hwnd, SW_SHOW);
+
+        // Restore original placement
+        let mut placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+
+        if GetWindowPlacement(hwnd, &mut placement).is_ok() {
+            let _ = ShowWindow(hwnd, SHOW_WINDOW_CMD(placement.showCmd as i32));
+            let _ = SetWindowPlacement(hwnd, &placement);
+        }
+
+        Ok(())
+    }
+}
+
+pub fn is_window_hidden(hwnd: HWND) -> bool {
+    unsafe { !IsWindowVisible(hwnd).as_bool() }
+}
+
 pub struct MonitorInfo {
     pub hmonitor: isize,
     pub rect: RECT,
