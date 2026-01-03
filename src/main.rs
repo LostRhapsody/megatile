@@ -305,7 +305,7 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
         }
         hotkeys::HotkeyAction::MoveToWorkspaceFollow(num) => {
             let mut wm = workspace_manager.lock().unwrap();
-            match wm.move_window_to_workspace_follow(num, true) {
+            match wm.move_window_to_workspace_follow(num) {
                 Ok(()) => {
                     println!("Moved window to workspace {} and followed", num);
                     wm.print_workspace_status();

@@ -202,7 +202,6 @@ impl WorkspaceManager {
         let hwnd = HWND(focused_window.hwnd as *mut std::ffi::c_void);
 
         let old_workspace = focused_window.workspace;
-        let active_workspace = self.active_workspace_global;
 
         if old_workspace == new_workspace {
             return Ok(()); // Already in target workspace
@@ -230,7 +229,6 @@ impl WorkspaceManager {
 
         if let Some(mut window) = window_to_move {
             // Update window's workspace
-            let old_ws = window.workspace;
             window.workspace = new_workspace;
 
             // Keep window on same monitor (find target workspace on same monitor)
@@ -240,43 +238,20 @@ impl WorkspaceManager {
                 }
             }
 
-            // Handle visibility
-            if old_ws == active_workspace {
-                // Moving from active workspace: hide the window
-                hide_window_from_taskbar(hwnd).ok();
-            }
-
-            if new_workspace == active_workspace {
-                // Moving to active workspace: show and tile the window
-                show_window_in_taskbar(hwnd).ok();
-
-                // Re-tile active workspace
-                drop(monitors);
-                self.tile_active_workspaces();
-                self.apply_window_positions();
-            }
-
             println!("Successfully moved window to workspace {}", new_workspace);
+
+            // Switch to the target workspace to show the moved window
+            drop(monitors);
+            self.switch_workspace_with_windows(new_workspace)?;
             Ok(())
         } else {
             Err("Window not found".to_string())
         }
     }
 
-    pub fn move_window_to_workspace_follow(
-        &mut self,
-        new_workspace: u8,
-        follow: bool,
-    ) -> Result<(), String> {
-        // First move the window
-        self.move_window_to_workspace(new_workspace)?;
-
-        // If follow is true, switch to the target workspace
-        if follow {
-            self.switch_workspace_with_windows(new_workspace)?;
-        }
-
-        Ok(())
+    pub fn move_window_to_workspace_follow(&mut self, new_workspace: u8) -> Result<(), String> {
+        // Move already switches to the target workspace
+        self.move_window_to_workspace(new_workspace)
     }
 
     pub fn tile_active_workspaces(&self) {
