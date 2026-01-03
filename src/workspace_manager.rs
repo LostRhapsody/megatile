@@ -27,6 +27,42 @@ impl WorkspaceManager {
         self.active_workspace_global
     }
 
+    pub fn get_all_managed_hwnds(&self) -> Vec<isize> {
+        let mut hwnds = Vec::new();
+        let monitors = self.monitors.lock().unwrap();
+        for monitor in monitors.iter() {
+            for workspace in &monitor.workspaces {
+                for window in &workspace.windows {
+                    hwnds.push(window.hwnd);
+                }
+            }
+        }
+        hwnds
+    }
+
+    pub fn get_monitor_for_window(&self, hwnd: HWND) -> Option<usize> {
+        use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+        let mut rect = RECT::default();
+        unsafe {
+            if GetWindowRect(hwnd, &mut rect).is_err() {
+                return None;
+            }
+        }
+
+        let monitors = self.monitors.lock().unwrap();
+        for (i, monitor) in monitors.iter().enumerate() {
+            if rect.left >= monitor.rect.left
+                && rect.top >= monitor.rect.top
+                && rect.right <= monitor.rect.right
+                && rect.bottom <= monitor.rect.bottom
+            {
+                return Some(i);
+            }
+        }
+        None
+    }
+
     pub fn switch_workspace(&mut self, workspace_num: u8) -> bool {
         if workspace_num < 1 || workspace_num > 9 {
             return false;
@@ -124,7 +160,7 @@ impl WorkspaceManager {
         for monitor in monitors.iter() {
             if let Some(workspace) = monitor.get_workspace(workspace_num) {
                 for window in &workspace.windows {
-                    if let Err(e) = hide_window_from_taskbar(window.hwnd) {
+                    if let Err(e) = hide_window_from_taskbar(HWND(window.hwnd as _)) {
                         eprintln!("Failed to hide window {:?}: {}", window.hwnd, e);
                     }
                 }
@@ -140,7 +176,7 @@ impl WorkspaceManager {
         for monitor in monitors.iter() {
             if let Some(workspace) = monitor.get_workspace(workspace_num) {
                 for window in &workspace.windows {
-                    if let Err(e) = show_window_in_taskbar(window.hwnd) {
+                    if let Err(e) = show_window_in_taskbar(HWND(window.hwnd as _)) {
                         eprintln!("Failed to show window {:?}: {}", window.hwnd, e);
                     }
                 }
@@ -231,7 +267,7 @@ impl WorkspaceManager {
             let active_workspace = monitor.get_active_workspace();
 
             for window in &active_workspace.windows {
-                self.set_window_position(window.hwnd, &window.rect);
+                self.set_window_position(HWND(window.hwnd as _), &window.rect);
             }
         }
     }
@@ -289,7 +325,7 @@ impl WorkspaceManager {
         };
 
         if let Some(target_window) = target {
-            self.set_window_focus(target_window.hwnd);
+            self.set_window_focus(HWND(target_window.hwnd as _));
         }
 
         Ok(())
@@ -371,7 +407,7 @@ impl WorkspaceManager {
 
         let focused = active_windows
             .iter()
-            .find(|(window, _)| window.hwnd == focused_hwnd)
+            .find(|(window, _)| window.hwnd == focused_hwnd.0 as isize)
             .map(|(window, _)| window.clone());
 
         println!("Focused window: {:?}", focused);
@@ -391,7 +427,8 @@ impl WorkspaceManager {
 
         if let Some(target_window) = target {
             println!("Swapping window positions");
-            let swap_result = self.swap_window_positions(focused.hwnd, target_window.hwnd);
+            let swap_result =
+                self.swap_window_positions(HWND(focused.hwnd as _), HWND(target_window.hwnd as _));
             match swap_result {
                 Ok(()) => {
                     // Re-apply window positions after swap
@@ -399,7 +436,7 @@ impl WorkspaceManager {
                     self.apply_window_positions();
                     println!("Window positions swapped");
                     // Keep focus on the moved window
-                    self.set_window_focus(focused.hwnd);
+                    self.set_window_focus(HWND(focused.hwnd as _));
                     println!("Focus restored");
                 }
                 Err(err) => {
@@ -424,10 +461,10 @@ impl WorkspaceManager {
         for (monitor_idx, monitor) in monitors.iter().enumerate() {
             let workspace_idx = (monitor.active_workspace - 1) as usize;
             for (win_idx, window) in monitor.workspaces[workspace_idx].windows.iter().enumerate() {
-                if window.hwnd == hwnd1 {
+                if window.hwnd == hwnd1.0 as isize {
                     window1_info = Some((monitor_idx, win_idx, window.rect));
                 }
-                if window.hwnd == hwnd2 {
+                if window.hwnd == hwnd2.0 as isize {
                     window2_info = Some((monitor_idx, win_idx, window.rect));
                 }
             }

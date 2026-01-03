@@ -12,7 +12,7 @@ pub struct WindowInfo {
 
 #[derive(Debug, Clone)]
 pub struct Window {
-    pub hwnd: HWND,
+    pub hwnd: isize,
     pub workspace: u8,
     pub monitor: usize,
     pub rect: RECT,
@@ -21,7 +21,7 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn new(hwnd: HWND, workspace: u8, monitor: usize, rect: RECT) -> Self {
+    pub fn new(hwnd: isize, workspace: u8, monitor: usize, rect: RECT) -> Self {
         Window {
             hwnd,
             workspace,
@@ -50,16 +50,19 @@ impl Workspace {
     }
 
     pub fn remove_window(&mut self, hwnd: HWND) -> Option<Window> {
-        let pos = self.windows.iter().position(|w| w.hwnd == hwnd)?;
+        let pos = self
+            .windows
+            .iter()
+            .position(|w| w.hwnd == hwnd.0 as isize)?;
         Some(self.windows.remove(pos))
     }
 
     pub fn get_window(&self, hwnd: HWND) -> Option<&Window> {
-        self.windows.iter().find(|w| w.hwnd == hwnd)
+        self.windows.iter().find(|w| w.hwnd == hwnd.0 as isize)
     }
 
     pub fn get_window_mut(&mut self, hwnd: HWND) -> Option<&mut Window> {
-        self.windows.iter_mut().find(|w| w.hwnd == hwnd)
+        self.windows.iter_mut().find(|w| w.hwnd == hwnd.0 as isize)
     }
 
     pub fn get_focused_window(&self) -> Option<&Window> {

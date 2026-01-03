@@ -11,14 +11,17 @@ mod workspace;
 mod workspace_manager;
 
 use hotkeys::HotkeyManager;
+use std::collections::HashSet;
+
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 use tray::TrayManager;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, HWND_MESSAGE};
-use windows::core::PCWSTR;
 use windows_lib::{enumerate_monitors, get_normal_windows, show_window_in_taskbar};
 use workspace_manager::WorkspaceManager;
 
@@ -27,6 +30,64 @@ static CLASS_NAME: [u16; 22] = [
     119, 0,
 ];
 static TITLE: [u16; 9] = [77, 101, 103, 97, 84, 105, 108, 101, 0];
+
+fn start_window_monitoring(workspace_manager: Arc<Mutex<WorkspaceManager>>) {
+    thread::spawn(move || loop {
+        let new_windows = detect_new_windows(&workspace_manager);
+        if !new_windows.is_empty() {
+            manage_new_windows(&workspace_manager, new_windows);
+        }
+        thread::sleep(Duration::from_millis(500));
+    });
+}
+
+fn detect_new_windows(
+    workspace_manager: &Arc<Mutex<WorkspaceManager>>,
+) -> Vec<windows_lib::WindowInfo> {
+    let existing_hwnds: HashSet<isize> = {
+        let wm = workspace_manager.lock().unwrap();
+        wm.get_all_managed_hwnds().into_iter().collect()
+    };
+
+    let all_windows = windows_lib::get_normal_windows();
+    all_windows
+        .into_iter()
+        .filter(|w| !existing_hwnds.contains(&(w.hwnd.0 as isize)))
+        .collect()
+}
+
+fn manage_new_windows(
+    workspace_manager: &Arc<Mutex<WorkspaceManager>>,
+    new_windows: Vec<windows_lib::WindowInfo>,
+) {
+    let mut wm = workspace_manager.lock().unwrap();
+    let active_workspace = wm.get_active_workspace();
+
+    for window_info in &new_windows {
+        let monitor_index = wm.get_monitor_for_window(window_info.hwnd).unwrap_or(0);
+
+        let window = workspace::Window::new(
+            window_info.hwnd.0 as isize,
+            active_workspace,
+            monitor_index,
+            window_info.rect,
+        );
+
+        if active_workspace == wm.get_active_workspace() {
+            let _ = show_window_in_taskbar(HWND(window.hwnd as *mut std::ffi::c_void));
+        } else {
+            let _ =
+                windows_lib::hide_window_from_taskbar(HWND(window.hwnd as *mut std::ffi::c_void));
+        }
+
+        wm.add_window(window);
+    }
+
+    if !new_windows.is_empty() {
+        wm.tile_active_workspaces();
+        wm.apply_window_positions();
+    }
+}
 
 fn main() {
     println!("MegaTile - Window Manager");
@@ -58,13 +119,16 @@ fn main() {
         let wm = workspace_manager.lock().unwrap();
         for window_info in normal_windows {
             let is_focused = window_info.hwnd == focused_hwnd;
+            let monitor_index = wm.get_monitor_for_window(window_info.hwnd).unwrap_or(0);
             let mut window = workspace::Window::new(
-                window_info.hwnd,
+                window_info.hwnd.0 as isize,
                 1, // Assign to workspace 1
-                0, // TODO: Determine which monitor
+                monitor_index,
                 window_info.rect,
             );
             window.is_focused = is_focused;
+            // Since workspace 1 is active, show in taskbar
+            let _ = show_window_in_taskbar(window_info.hwnd);
             wm.add_window(window);
         }
     }
@@ -78,6 +142,9 @@ fn main() {
         wm.apply_window_positions();
     }
     println!("Applied initial tiling to workspace 1");
+
+    // Start monitoring for new windows
+    start_window_monitoring(Arc::clone(&workspace_manager));
 
     // Initialize tray icon
     let tray = TrayManager::new().expect("Failed to create tray icon");
@@ -134,7 +201,9 @@ fn cleanup_on_exit(workspace_manager: &Arc<Mutex<WorkspaceManager>>) {
             if let Some(workspace) = monitor.get_workspace(workspace_num) {
                 for window in &workspace.windows {
                     // Show all windows regardless of current workspace
-                    if let Err(e) = show_window_in_taskbar(window.hwnd) {
+                    if let Err(e) =
+                        show_window_in_taskbar(HWND(window.hwnd as *mut std::ffi::c_void))
+                    {
                         eprintln!("Failed to restore window {:?}: {}", window.hwnd, e);
                     }
                 }
