@@ -344,6 +344,116 @@ impl WorkspaceManager {
             let _ = SetForegroundWindow(hwnd);
         }
     }
+
+    pub fn move_window(&self, direction: FocusDirection) -> Result<(), String> {
+        // Find all windows in active workspace on all monitors first
+        let mut active_windows: Vec<(Window, RECT)> = Vec::new();
+        {
+            let monitors = self.monitors.lock().unwrap();
+            for monitor in monitors.iter() {
+                let active_workspace = monitor.get_active_workspace();
+                for window in &active_workspace.windows {
+                    active_windows.push((window.clone(), window.rect));
+                }
+            }
+        }
+
+        if active_windows.is_empty() {
+            println!("No active windows found");
+            return Ok(()); // No windows to move
+        }
+
+        // Find the focused window in our active windows list
+        let focused_hwnd = unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+            GetForegroundWindow()
+        };
+
+        let focused = active_windows
+            .iter()
+            .find(|(window, _)| window.hwnd == focused_hwnd)
+            .map(|(window, _)| window.clone());
+
+        println!("Focused window: {:?}", focused);
+
+        if focused.is_none() {
+            return Err("Focused window not found in active workspace".to_string());
+        }
+
+        let focused = focused.unwrap();
+
+        println!("Active windows: {:?}", active_windows);
+
+        // Find target window to swap with
+        let target = self.find_next_focus(&focused, direction, &active_windows);
+
+        println!("Target window: {:?}", target);
+
+        if let Some(target_window) = target {
+            println!("Swapping window positions");
+            let swap_result = self.swap_window_positions(focused.hwnd, target_window.hwnd);
+            match swap_result {
+                Ok(()) => {
+                    // Re-apply window positions after swap
+                    println!("Re-applying window positions");
+                    self.apply_window_positions();
+                    println!("Window positions swapped");
+                    // Keep focus on the moved window
+                    self.set_window_focus(focused.hwnd);
+                    println!("Focus restored");
+                }
+                Err(err) => {
+                    println!("Failed to swap window positions: {}", err);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn swap_window_positions(&self, hwnd1: HWND, hwnd2: HWND) -> Result<(), String> {
+        println!("Swapping window positions...");
+        println!("Locking windows");
+        let mut monitors = self.monitors.lock().unwrap();
+
+        // Find both windows and swap their rects
+        let mut window1_info: Option<(usize, usize, RECT)> = None;
+        let mut window2_info: Option<(usize, usize, RECT)> = None;
+
+        println!("Finding windows...");
+        for (monitor_idx, monitor) in monitors.iter().enumerate() {
+            let workspace_idx = (monitor.active_workspace - 1) as usize;
+            for (win_idx, window) in monitor.workspaces[workspace_idx].windows.iter().enumerate() {
+                if window.hwnd == hwnd1 {
+                    window1_info = Some((monitor_idx, win_idx, window.rect));
+                }
+                if window.hwnd == hwnd2 {
+                    window2_info = Some((monitor_idx, win_idx, window.rect));
+                }
+            }
+        }
+
+        println!("Windows found.");
+
+        match (window1_info, window2_info) {
+            (Some((m1, w1, rect1)), Some((m2, w2, rect2))) => {
+                println!("Swapping windows...");
+                // Store workspace indices to avoid borrowing issues
+                let ws1_idx = (monitors[m1].active_workspace - 1) as usize;
+                let ws2_idx = (monitors[m2].active_workspace - 1) as usize;
+
+                // Swap the rects
+                monitors[m1].workspaces[ws1_idx].windows[w1].rect = rect2;
+                monitors[m2].workspaces[ws2_idx].windows[w2].rect = rect1;
+                Ok(())
+            }
+            (None, None) => {
+                println!("Could not find both windows to swap");
+                return Err("Could not find both windows to swap".to_string());
+            }
+            _ => Err("Unexpected error occurred".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

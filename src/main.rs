@@ -16,8 +16,8 @@ use std::time::Duration;
 use tray::TrayManager;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, HWND_MESSAGE};
 use windows::core::PCWSTR;
 use windows_lib::{enumerate_monitors, get_normal_windows, show_window_in_taskbar};
 use workspace_manager::WorkspaceManager;
@@ -105,17 +105,17 @@ fn main() {
         // Process window messages
         let mut msg = MSG::default();
         while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
-            unsafe {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-
-                if msg.message == WM_HOTKEY {
-                    let action = hotkey_manager.get_action(msg.wParam.0 as i32);
-                    if let Some(action) = action {
-                        handle_hotkey(action, &workspace_manager);
-                    }
-                } else if msg.message == WM_DESTROY {
-                    PostQuitMessage(0);
+            // Check for WM_HOTKEY BEFORE dispatching
+            if msg.message == WM_HOTKEY {
+                let action = hotkey_manager.get_action(msg.wParam.0 as i32);
+                if let Some(action) = action {
+                    handle_hotkey(action, &workspace_manager);
+                }
+            } else {
+                // Only dispatch non-hotkey messages
+                unsafe {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
                 }
             }
         }
@@ -158,6 +158,23 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
                 Err(e) => eprintln!("Failed to switch workspace: {}", e),
             }
         }
+        hotkeys::HotkeyAction::MoveLeft => {
+            println!("Moving left");
+            let wm = workspace_manager.lock().unwrap();
+            if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Left) {
+                eprintln!("Failed to move window: {}", e);
+            } else {
+                println!("Moved window left");
+            }
+        }
+        hotkeys::HotkeyAction::MoveRight => {
+            let wm = workspace_manager.lock().unwrap();
+            if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Right) {
+                eprintln!("Failed to move window: {}", e);
+            } else {
+                println!("Moved window right");
+            }
+        }
         hotkeys::HotkeyAction::FocusLeft => {
             let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Left) {
@@ -170,8 +187,7 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
             let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Right) {
                 eprintln!("Failed to move focus: {}", e);
-            }
-            {
+            } else {
                 println!("Moved focus right");
             }
         }
@@ -179,8 +195,7 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
             let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Up) {
                 eprintln!("Failed to move focus: {}", e);
-            }
-            {
+            } else {
                 println!("Moved focus up");
             }
         }
@@ -188,9 +203,24 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
             let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Down) {
                 eprintln!("Failed to move focus: {}", e);
-            }
-            {
+            } else {
                 println!("Moved focus down");
+            }
+        }
+        hotkeys::HotkeyAction::MoveUp => {
+            let wm = workspace_manager.lock().unwrap();
+            if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Up) {
+                eprintln!("Failed to move window: {}", e);
+            } else {
+                println!("Moved window up");
+            }
+        }
+        hotkeys::HotkeyAction::MoveDown => {
+            let wm = workspace_manager.lock().unwrap();
+            if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Down) {
+                eprintln!("Failed to move window: {}", e);
+            } else {
+                println!("Moved window down");
             }
         }
         hotkeys::HotkeyAction::MoveToWorkspace(num) => {
@@ -199,6 +229,7 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
         }
         _ => {
             println!("Hotkey action: {:?}", action);
+            // TODO: Implement other actions in future steps
         }
     }
 }
@@ -236,7 +267,7 @@ fn create_message_window() -> Result<HWND, String> {
             0,
             0,
             0,
-            None,
+            Some(HWND_MESSAGE),
             None,
             Some(GetModuleHandleW(None).unwrap().into()),
             None,
