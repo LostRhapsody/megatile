@@ -60,7 +60,7 @@ fn manage_new_windows(
     workspace_manager: &Arc<Mutex<WorkspaceManager>>,
     new_windows: Vec<windows_lib::WindowInfo>,
 ) {
-    let mut wm = workspace_manager.lock().unwrap();
+    let wm = workspace_manager.lock().unwrap();
     let active_workspace = wm.get_active_workspace();
 
     for window_info in &new_windows {
@@ -293,8 +293,25 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
             }
         }
         hotkeys::HotkeyAction::MoveToWorkspace(num) => {
-            // TODO: Get currently focused window
-            println!("Move to workspace {} (not yet implemented)", num);
+            let mut wm = workspace_manager.lock().unwrap();
+            match wm.move_window_to_workspace(num) {
+                Ok(()) => {
+                    println!("Moved window to workspace {}", num);
+                    // Print updated status
+                    wm.print_workspace_status();
+                }
+                Err(e) => eprintln!("Failed to move window: {}", e),
+            }
+        }
+        hotkeys::HotkeyAction::MoveToWorkspaceFollow(num) => {
+            let mut wm = workspace_manager.lock().unwrap();
+            match wm.move_window_to_workspace_follow(num, true) {
+                Ok(()) => {
+                    println!("Moved window to workspace {} and followed", num);
+                    wm.print_workspace_status();
+                }
+                Err(e) => eprintln!("Failed to move window: {}", e),
+            }
         }
         _ => {
             println!("Hotkey action: {:?}", action);

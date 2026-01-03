@@ -186,62 +186,97 @@ impl WorkspaceManager {
         Ok(())
     }
 
-    pub fn move_window_to_workspace(
-        &mut self,
-        hwnd: HWND,
-        new_workspace: u8,
-    ) -> Result<(), String> {
+    pub fn move_window_to_workspace(&mut self, new_workspace: u8) -> Result<(), String> {
         if new_workspace < 1 || new_workspace > 9 {
             return Err("Invalid workspace number".to_string());
         }
 
-        let mut monitors = self.monitors.lock().unwrap();
+        // Get currently focused window
+        let focused = self.get_focused_window();
 
-        // Find and remove window from its current workspace
+        if focused.is_none() {
+            return Err("No focused window".to_string());
+        }
+
+        let focused_window = focused.unwrap();
+        let hwnd = HWND(focused_window.hwnd as *mut std::ffi::c_void);
+
+        let old_workspace = focused_window.workspace;
+        let active_workspace = self.active_workspace_global;
+
+        if old_workspace == new_workspace {
+            return Ok(()); // Already in target workspace
+        }
+
+        println!(
+            "Moving window {:?} from workspace {} to workspace {}",
+            hwnd, old_workspace, new_workspace
+        );
+
+        // Remove window from current workspace
         let mut window_to_move = None;
-        let mut current_workspace = 0;
-        let mut monitor_index = 0;
+        let mut source_monitor_idx = 0;
 
+        let mut monitors = self.monitors.lock().unwrap();
         for (m_idx, monitor) in monitors.iter_mut().enumerate() {
-            for w_idx in 0..9 {
-                if let Some(workspace) = monitor.get_workspace_mut((w_idx + 1) as u8) {
-                    if let Some(window) = workspace.remove_window(hwnd) {
-                        window_to_move = Some(window);
-                        current_workspace = w_idx + 1;
-                        monitor_index = m_idx;
-                        break;
-                    }
+            if let Some(workspace) = monitor.get_workspace_mut(old_workspace) {
+                if let Some(window) = workspace.remove_window(hwnd) {
+                    window_to_move = Some(window);
+                    source_monitor_idx = m_idx;
+                    break;
                 }
-            }
-            if window_to_move.is_some() {
-                break;
             }
         }
 
         if let Some(mut window) = window_to_move {
             // Update window's workspace
+            let old_ws = window.workspace;
             window.workspace = new_workspace;
 
-            // Add to new workspace
-            if let Some(monitor) = monitors.get_mut(monitor_index) {
+            // Keep window on same monitor (find target workspace on same monitor)
+            if let Some(monitor) = monitors.get_mut(source_monitor_idx) {
                 if let Some(workspace) = monitor.get_workspace_mut(new_workspace) {
-                    workspace.add_window(window);
+                    workspace.add_window(window.clone());
                 }
             }
 
-            // If moving from active workspace, hide it
-            if current_workspace == self.active_workspace_global {
+            // Handle visibility
+            if old_ws == active_workspace {
+                // Moving from active workspace: hide the window
                 hide_window_from_taskbar(hwnd).ok();
             }
-            // If moving to active workspace, show it
-            else if new_workspace == self.active_workspace_global {
+
+            if new_workspace == active_workspace {
+                // Moving to active workspace: show and tile the window
                 show_window_in_taskbar(hwnd).ok();
+
+                // Re-tile active workspace
+                drop(monitors);
+                self.tile_active_workspaces();
+                self.apply_window_positions();
             }
 
+            println!("Successfully moved window to workspace {}", new_workspace);
             Ok(())
         } else {
             Err("Window not found".to_string())
         }
+    }
+
+    pub fn move_window_to_workspace_follow(
+        &mut self,
+        new_workspace: u8,
+        follow: bool,
+    ) -> Result<(), String> {
+        // First move the window
+        self.move_window_to_workspace(new_workspace)?;
+
+        // If follow is true, switch to the target workspace
+        if follow {
+            self.switch_workspace_with_windows(new_workspace)?;
+        }
+
+        Ok(())
     }
 
     pub fn tile_active_workspaces(&self) {
@@ -489,6 +524,24 @@ impl WorkspaceManager {
                 return Err("Could not find both windows to swap".to_string());
             }
             _ => Err("Unexpected error occurred".to_string()),
+        }
+    }
+
+    pub fn print_workspace_status(&self) {
+        let monitors = self.monitors.lock().unwrap();
+        for (m_idx, monitor) in monitors.iter().enumerate() {
+            println!("Monitor {}:", m_idx);
+            for ws in 1..=9 {
+                if let Some(workspace) = monitor.get_workspace(ws) {
+                    let count = workspace.windows.len();
+                    let active = if monitor.active_workspace == ws {
+                        " (active)"
+                    } else {
+                        ""
+                    };
+                    println!("  Workspace {}: {} windows{}", ws, count, active);
+                }
+            }
         }
     }
 }

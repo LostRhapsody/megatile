@@ -23,6 +23,7 @@ pub enum HotkeyAction {
     // Workspace switching
     SwitchWorkspace(u8),
     MoveToWorkspace(u8),
+    MoveToWorkspaceFollow(u8),
 
     // Window operations
     CloseWindow,
@@ -123,6 +124,61 @@ impl HotkeyManager {
                 30,
                 HotkeyAction::ToggleFullscreen,
             ), // F
+            // Move to workspace and follow (Alt + Ctrl + Shift + 1-9)
+            (
+                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
+                VK_1,
+                31,
+                HotkeyAction::MoveToWorkspaceFollow(1),
+            ),
+            (
+                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
+                VK_2,
+                32,
+                HotkeyAction::MoveToWorkspaceFollow(2),
+            ),
+            (
+                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
+                VK_3,
+                33,
+                HotkeyAction::MoveToWorkspaceFollow(3),
+            ),
+            (
+                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
+                VK_4,
+                34,
+                HotkeyAction::MoveToWorkspaceFollow(4),
+            ),
+            (
+                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
+                VK_5,
+                35,
+                HotkeyAction::MoveToWorkspaceFollow(5),
+            ),
+            (
+                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
+                VK_6,
+                36,
+                HotkeyAction::MoveToWorkspaceFollow(6),
+            ),
+            (
+                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
+                VK_7,
+                37,
+                HotkeyAction::MoveToWorkspaceFollow(7),
+            ),
+            (
+                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
+                VK_8,
+                38,
+                HotkeyAction::MoveToWorkspaceFollow(8),
+            ),
+            (
+                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
+                VK_9,
+                39,
+                HotkeyAction::MoveToWorkspaceFollow(9),
+            ),
         ];
 
         for (modifiers, vk, id, action) in hotkeys {

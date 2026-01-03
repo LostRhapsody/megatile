@@ -1,8 +1,8 @@
-# STEP 10: Move Windows to Workspaces (Win + Shift + Numbers)
+# STEP 10: Move Windows to Workspaces (Alt + Shift + Numbers)
 
 ## Objective
 
-Implement functionality to move the focused window to a different workspace using Win + Shift + Number keys.
+Implement functionality to move the focused window to a different workspace using Alt + Shift + Number keys.
 
 ## Tasks
 
@@ -148,7 +148,7 @@ impl WorkspaceManager {
 }
 ```
 
-Update hotkey to follow (Win + Ctrl + Shift + Number):
+Update hotkey to follow (Alt + Ctrl + Shift + Number):
 
 ```rust
 // In src/hotkeys.rs, add new hotkeys for follow
@@ -161,11 +161,11 @@ Update hotkey to follow (Win + Ctrl + Shift + Number):
 1. Run the application
 2. Open multiple applications (5-6 windows)
 3. Focus a window
-4. Press Win + Shift + 2 to move it to workspace 2
+4. Press Alt + Shift + 2 to move it to workspace 2
 5. Verify:
    - Window disappears from current workspace
    - Window is no longer in taskbar
-6. Press Win + 2 to switch to workspace 2
+6. Press Alt + 2 to switch to workspace 2
 7. Verify:
    - Window appears in workspace 2
    - Window is tiled correctly
@@ -175,7 +175,7 @@ Update hotkey to follow (Win + Ctrl + Shift + Number):
 
 ## Success Criteria
 
-- [ ] Win + Shift + Number moves focused window to target workspace
+- [ ] Alt + Shift + Number moves focused window to target workspace
 - [ ] Window is hidden when moving away from active workspace
 - [ ] Window is shown when moving to active workspace
 - [ ] Window maintains correct monitor assignment
@@ -186,7 +186,7 @@ Update hotkey to follow (Win + Ctrl + Shift + Number):
 
 ### Move to Workspace Flow
 
-1. **User action**: Press Win + Shift + N (workspace number)
+1. **User action**: Press Alt + Shift + N (workspace number)
 2. **Get focused window**: Find currently focused window
 3. **Remove from current workspace**:
    - Locate window in its workspace
@@ -240,4 +240,4 @@ Windows stay on the same monitor when moved between workspaces:
 
 ## Next Steps
 
-Proceed to [STEP_11.md](STEP_11.md) to implement window closing (Win + W).
+Proceed to [STEP_11.md](STEP_11.md) to implement window closing (Alt + W).
