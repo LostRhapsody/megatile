@@ -32,12 +32,38 @@ static CLASS_NAME: [u16; 22] = [
 static TITLE: [u16; 9] = [77, 101, 103, 97, 84, 105, 108, 101, 0];
 
 fn start_window_monitoring(workspace_manager: Arc<Mutex<WorkspaceManager>>) {
-    thread::spawn(move || loop {
-        let new_windows = detect_new_windows(&workspace_manager);
-        if !new_windows.is_empty() {
-            manage_new_windows(&workspace_manager, new_windows);
+    thread::spawn(move || {
+        let mut previous_hwnds: std::collections::HashSet<isize> = {
+            let wm = workspace_manager.lock().unwrap();
+            wm.get_all_managed_hwnds().into_iter().collect()
+        };
+
+        loop {
+            let current_hwnds: std::collections::HashSet<isize> = {
+                let wm = workspace_manager.lock().unwrap();
+                wm.get_all_managed_hwnds().into_iter().collect()
+            };
+
+            // Detect closed windows
+            let closed_hwnds: Vec<isize> =
+                previous_hwnds.difference(&current_hwnds).cloned().collect();
+            for hwnd in closed_hwnds {
+                println!("Window {:?} was closed, removing from workspace", hwnd);
+                let wm = workspace_manager.lock().unwrap();
+                wm.remove_window_with_tiling(HWND(hwnd as *mut std::ffi::c_void));
+            }
+
+            // Detect new windows
+            let new_windows = detect_new_windows(&workspace_manager);
+            if !new_windows.is_empty() {
+                manage_new_windows(&workspace_manager, new_windows);
+            }
+
+            // Update previous_hwnds for next iteration
+            previous_hwnds = current_hwnds;
+
+            thread::sleep(Duration::from_millis(500));
         }
-        thread::sleep(Duration::from_millis(500));
     });
 }
 
@@ -94,6 +120,15 @@ fn main() {
 
     // Initialize workspace manager
     let workspace_manager = Arc::new(Mutex::new(WorkspaceManager::new()));
+
+    // Setup Ctrl+C handler for cleanup
+    let wm_for_ctrlc = Arc::clone(&workspace_manager);
+    ctrlc::set_handler(move || {
+        println!("\nReceived Ctrl+C signal, cleaning up...");
+        cleanup_on_exit(&wm_for_ctrlc);
+        std::process::exit(0);
+    })
+    .expect("Error setting Ctrl+C handler");
 
     // Enumerate monitors and create monitor structs
     let monitor_infos = enumerate_monitors();
@@ -194,23 +229,34 @@ fn main() {
 fn cleanup_on_exit(workspace_manager: &Arc<Mutex<WorkspaceManager>>) {
     println!("Restoring all hidden windows...");
     let wm = workspace_manager.lock().unwrap();
-    let monitors = wm.get_monitors();
 
-    for monitor in monitors {
-        for workspace_num in 1..=9 {
-            if let Some(workspace) = monitor.get_workspace(workspace_num) {
-                for window in &workspace.windows {
-                    // Show all windows regardless of current workspace
-                    if let Err(e) =
-                        show_window_in_taskbar(HWND(window.hwnd as *mut std::ffi::c_void))
-                    {
-                        eprintln!("Failed to restore window {:?}: {}", window.hwnd, e);
-                    }
-                }
+    // Get all managed windows from all workspaces
+    let all_hwnds = wm.get_all_managed_hwnds();
+    println!("Found {} managed windows to restore", all_hwnds.len());
+
+    let mut restored_count = 0;
+    let mut failed_count = 0;
+
+    for hwnd in all_hwnds {
+        let hwnd_handle = HWND(hwnd as *mut std::ffi::c_void);
+
+        // Try to restore each window
+        match show_window_in_taskbar(hwnd_handle) {
+            Ok(()) => {
+                restored_count += 1;
+                println!("  ✓ Restored window {:?}", hwnd);
+            }
+            Err(e) => {
+                failed_count += 1;
+                eprintln!("  ✗ Failed to restore window {:?}: {}", hwnd, e);
             }
         }
     }
-    println!("Window restoration complete.");
+
+    println!(
+        "Window restoration complete: {} restored, {} failed",
+        restored_count, failed_count
+    );
 }
 
 fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<WorkspaceManager>>) {
