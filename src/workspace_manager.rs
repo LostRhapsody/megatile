@@ -1078,51 +1078,59 @@ impl WorkspaceManager {
     }
 
     pub fn update_window_positions(&mut self) {
-        use crate::windows_lib::get_normal_windows;
-        let current_windows = get_normal_windows();
-
         // Get monitor rects first
         let monitor_rects: Vec<RECT> = self.monitors.iter().map(|m| m.rect).collect();
 
-        for win_info in current_windows {
-            let hwnd_val = win_info.hwnd.0 as isize;
-            for monitor in self.monitors.iter_mut() {
-                if let Some(window) = monitor.find_window_by_hwnd_mut(hwnd_val) {
-                    let moved_from_last_known = window.rect.left != win_info.rect.left
-                        || window.rect.top != win_info.rect.top
-                        || window.rect.right != win_info.rect.right
-                        || window.rect.bottom != win_info.rect.bottom;
+        for monitor_idx in 0..self.monitors.len() {
+            // We need to move windows between workspaces/monitors, so we collect them first
+            // or we use a more complex approach. For now, let's just update in place.
+            
+            // To avoid borrowing issues, we'll iterate through indices
+            for ws_idx in 0..self.monitors[monitor_idx].workspaces.len() {
+                for win_idx in 0..self.monitors[monitor_idx].workspaces[ws_idx].windows.len() {
+                    let hwnd = HWND(self.monitors[monitor_idx].workspaces[ws_idx].windows[win_idx].hwnd as _);
+                    
+                    if let Ok(current_rect) = crate::windows_lib::get_window_rect(hwnd) {
+                        let window = &mut self.monitors[monitor_idx].workspaces[ws_idx].windows[win_idx];
+                        
+                        let moved_from_last_known = window.rect.left != current_rect.left
+                            || window.rect.top != current_rect.top
+                            || window.rect.right != current_rect.right
+                            || window.rect.bottom != current_rect.bottom;
 
-                    if moved_from_last_known {
-                        // Update original_rect whenever the window moves from its last known position
-                        // This captures the user's "preferred" position
-                        window.original_rect = win_info.rect;
+                        if moved_from_last_known {
+                            // Update original_rect whenever the window moves from its last known position
+                            // This captures the user's "preferred" position
+                            if !window.is_fullscreen {
+                                window.original_rect = current_rect;
+                            }
 
-                        if !window.is_tiled {
-                            // If it's floating, also update its current tracking rect
-                            window.rect = win_info.rect;
+                            if !window.is_tiled {
+                                // If it's floating, also update its current tracking rect
+                                window.rect = current_rect;
+                            }
                         }
-                    }
 
-                    // Also check if monitor changed using pre-collected rects
-                    let center_x = (win_info.rect.left + win_info.rect.right) / 2;
-                    let center_y = (win_info.rect.top + win_info.rect.bottom) / 2;
+                        // Also check if monitor changed
+                        let center_x = (current_rect.left + current_rect.right) / 2;
+                        let center_y = (current_rect.top + current_rect.bottom) / 2;
 
-                    let new_monitor_idx = monitor_rects
-                        .iter()
-                        .enumerate()
-                        .find(|(_, rect)| {
-                            center_x >= rect.left
-                                && center_x <= rect.right
-                                && center_y >= rect.top
-                                && center_y <= rect.bottom
-                        })
-                        .map(|(i, _)| i);
+                        let new_monitor_idx = monitor_rects
+                            .iter()
+                            .enumerate()
+                            .find(|(_, rect)| {
+                                center_x >= rect.left
+                                    && center_x <= rect.right
+                                    && center_y >= rect.top
+                                    && center_y <= rect.bottom
+                            })
+                            .map(|(i, _)| i);
 
-                    if let Some(new_idx) = new_monitor_idx
-                        && new_idx != window.monitor
-                    {
-                        window.monitor = new_idx;
+                        if let Some(new_idx) = new_monitor_idx
+                            && new_idx != window.monitor
+                        {
+                            window.monitor = new_idx;
+                        }
                     }
                 }
             }

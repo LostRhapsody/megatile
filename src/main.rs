@@ -64,7 +64,7 @@ unsafe extern "system" fn win_event_proc(
     }
 
     match event {
-        EVENT_OBJECT_CREATE => {
+        EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => {
             push_event(WindowEvent::WindowCreated(hwnd.0 as isize));
         }
         EVENT_OBJECT_DESTROY => {
@@ -319,73 +319,89 @@ fn main() {
             }
         }
 
-        // Process ONE event from the queue per iteration
-        let event = if let Some(queue) = EVENT_QUEUE.get() {
-            if let Ok(mut q) = queue.lock() {
-                q.pop_front()
+        // Process all events from the queue per iteration
+        loop {
+            let event = if let Some(queue) = EVENT_QUEUE.get() {
+                if let Ok(mut q) = queue.lock() {
+                    q.pop_front()
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
-        if let Some(event) = event {
-            match event {
-                WindowEvent::Hotkey(action) => {
-                    handle_action(action, &mut wm);
-                }
-                WindowEvent::WindowCreated(hwnd_val) => {
-                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
-                    println!("Event: Window Created {:?}", hwnd);
-                    // Filter windows here to avoid managing non-normal windows
-                    let all_windows = windows_lib::enumerate_windows();
-                    if let Some(info) = all_windows.into_iter().find(|w| w.hwnd == hwnd)
-                        && windows_lib::is_normal_window(hwnd, &info.class_name, &info.title)
-                    {
-                        let active_workspace = wm.get_active_workspace();
-                        let monitor_index = wm.get_monitor_for_window(hwnd).unwrap_or(0);
-                        let window = workspace::Window::new(
-                            hwnd_val,
-                            active_workspace,
-                            monitor_index,
-                            info.rect,
-                        );
-                        let _ = show_window_in_taskbar(hwnd);
-                        wm.add_window(window);
-                        wm.tile_active_workspaces();
-                        wm.apply_window_positions();
+            if let Some(event) = event {
+                match event {
+                    WindowEvent::Hotkey(action) => {
+                        handle_action(action, &mut wm);
                     }
-                }
-                WindowEvent::WindowDestroyed(hwnd_val) => {
-                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
-                    println!("Event: Window Destroyed {:?}", hwnd);
-                    wm.remove_window_with_tiling(hwnd);
-                }
-                WindowEvent::WindowMoved(_hwnd_val) => {
-                    wm.update_window_positions();
-                }
-                WindowEvent::DisplayChange => {
-                    println!("Event: Display Change");
-                    if let Err(e) = wm.reenumerate_monitors() {
-                        eprintln!("Failed to reenumerate monitors: {}", e);
+                    WindowEvent::WindowCreated(hwnd_val) => {
+                        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                        
+                        // Check if we already manage this window
+                        if wm.get_window(hwnd).is_some() {
+                            continue;
+                        }
+
+                        // Use is_normal_window_hwnd which is more efficient
+                        if windows_lib::is_normal_window_hwnd(hwnd) {
+                            println!("Event: Window Registered {:?}", hwnd);
+                            let info = windows_lib::WindowInfo {
+                                hwnd,
+                                title: windows_lib::get_window_title(hwnd),
+                                class_name: windows_lib::get_window_class(hwnd),
+                                rect: windows_lib::get_window_rect(hwnd).unwrap_or_default(),
+                                is_visible: true,
+                                is_minimized: false,
+                            };
+
+                            let active_workspace = wm.get_active_workspace();
+                            let monitor_index = wm.get_monitor_for_window(hwnd).unwrap_or(0);
+                            let window = workspace::Window::new(
+                                hwnd_val,
+                                active_workspace,
+                                monitor_index,
+                                info.rect,
+                            );
+                            let _ = show_window_in_taskbar(hwnd);
+                            wm.add_window(window);
+                            wm.tile_active_workspaces();
+                            wm.apply_window_positions();
+                        }
                     }
-                }
-                WindowEvent::PeriodicCheck => {
-                    wm.update_window_positions();
-                    if wm.check_monitor_changes() {
-                        println!("Monitor change detected by periodic check");
+                    WindowEvent::WindowDestroyed(hwnd_val) => {
+                        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                        println!("Event: Window Destroyed {:?}", hwnd);
+                        wm.remove_window_with_tiling(hwnd);
+                    }
+                    WindowEvent::WindowMoved(_hwnd_val) => {
+                        wm.update_window_positions();
+                    }
+                    WindowEvent::DisplayChange => {
+                        println!("Event: Display Change");
                         if let Err(e) = wm.reenumerate_monitors() {
                             eprintln!("Failed to reenumerate monitors: {}", e);
                         }
                     }
+                    WindowEvent::PeriodicCheck => {
+                        wm.update_window_positions();
+                        if wm.check_monitor_changes() {
+                            println!("Monitor change detected by periodic check");
+                            if let Err(e) = wm.reenumerate_monitors() {
+                                eprintln!("Failed to reenumerate monitors: {}", e);
+                            }
+                        }
+                    }
+                    WindowEvent::TrayExit => {
+                        println!("Exiting MegaTile...");
+                        cleanup_on_exit(&mut wm);
+                        hotkey_manager.unregister_all(hwnd);
+                        return;
+                    }
                 }
-                WindowEvent::TrayExit => {
-                    println!("Exiting MegaTile...");
-                    cleanup_on_exit(&mut wm);
-                    hotkey_manager.unregister_all(hwnd);
-                    return;
-                }
+            } else {
+                break;
             }
         }
 
@@ -426,7 +442,7 @@ fn create_message_window() -> Result<HWND, String> {
             0,
             0,
             0,
-            Some(HWND_MESSAGE),
+            None,
             None,
             Some(GetModuleHandleW(None).unwrap().into()),
             None,
