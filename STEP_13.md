@@ -1,9 +1,11 @@
-# STEP 12: Toggle Tiling Algorithm (Win + T)
+# STEP 12: Toggle Tiling Algorithm (Alt + T)
 
 ## Objective
 
-Implement tiling algorithm toggle functionality to switch between different tiling layouts. This sets up the infrastructure for multiple algorithms.
+STOP!
+This step needs to be re-done. Alt + T should toggle the current window so it STOPS being managed by megatile, i.e. makes it not a tile, or floating again. The original ask for this task was to 'toggle the tiling algo' as in switch algorithms, but I don't really care about that.
 
+So don't implement this task until we re-write it to address for that.
 ## Tasks
 
 ### 12.1 Define Tiling Algorithms
@@ -256,16 +258,16 @@ impl WorkspaceManager {
 
 1. Run the application
 2. Open multiple applications
-3. Press Win + T to toggle tiling algorithm
+3. Press Alt + T to toggle tiling algorithm
 4. Verify:
    - Console shows algorithm change
    - Windows re-tile (though no visual change with only Dwindle)
-5. Press Win + S to view status and see current algorithm
+5. Press Alt + S to view status and see current algorithm
 6. Verify status shows correct tiling algorithm
 
 ## Success Criteria
 
-- [ ] Win + T toggles between tiling algorithms
+- [ ] Alt + T toggles between tiling algorithms
 - [ ] Console logs algorithm changes
 - [ ] Windows are re-tiled after algorithm change
 - [ ] Workspace status shows current algorithm
@@ -287,7 +289,7 @@ impl WorkspaceManager {
 
 ### Algorithm Toggle Flow
 
-1. **User action**: Press Win + T
+1. **User action**: Press Alt + T
 2. **Get current algorithm**: Check current tiling algorithm
 3. **Toggle to next**: Cycle to next algorithm (currently just Dwindle)
 4. **Re-tile**: Apply new algorithm to all active workspaces
@@ -334,4 +336,4 @@ Future:
 
 ## Next Steps
 
-Proceed to [STEP_13.md](STEP_13.md) to implement fullscreen toggle (Win + F).
+Proceed to [STEP_13.md](STEP_13.md) to implement fullscreen toggle (Alt + F).
