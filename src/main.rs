@@ -338,7 +338,7 @@ fn main() {
                     }
                     WindowEvent::WindowCreated(hwnd_val) => {
                         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
-                        
+
                         // Check if we already manage this window
                         if wm.get_window(hwnd).is_some() {
                             continue;

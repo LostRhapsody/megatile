@@ -71,10 +71,13 @@ pub fn get_window_class(hwnd: HWND) -> String {
 pub fn is_normal_window_hwnd(hwnd: HWND) -> bool {
     let title = get_window_title(hwnd);
     let class_name = get_window_class(hwnd);
-    is_normal_window(hwnd, &class_name, &title)
+    let is_normal = is_normal_window(hwnd, &class_name, &title);
+    println!("is normal? {}", is_normal);
+    is_normal
 }
 
 pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
+    println!("Checking if window, title {}, class name {}, hwnd {:?}, is 'normal'.", title, class_name, hwnd);
     unsafe {
         if !IsWindowVisible(hwnd).as_bool() {
             return false;
@@ -84,7 +87,8 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
             return false;
         }
 
-        if title == "Windows Input Experience" {
+        if title == "Windows Input Experience" ||
+        title == "Chrome Legacy Window" {
             return false;
         }
 
@@ -128,10 +132,12 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
         }
 
         if ex_style & WS_EX_APPWINDOW.0 != 0 {
+            println!("Is normal, case 1");
             return true;
         }
 
         if !title.trim().is_empty() {
+            println!("Is normal, case 2");
             return true;
         }
 

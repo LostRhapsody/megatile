@@ -1084,15 +1084,18 @@ impl WorkspaceManager {
         for monitor_idx in 0..self.monitors.len() {
             // We need to move windows between workspaces/monitors, so we collect them first
             // or we use a more complex approach. For now, let's just update in place.
-            
+
             // To avoid borrowing issues, we'll iterate through indices
             for ws_idx in 0..self.monitors[monitor_idx].workspaces.len() {
                 for win_idx in 0..self.monitors[monitor_idx].workspaces[ws_idx].windows.len() {
-                    let hwnd = HWND(self.monitors[monitor_idx].workspaces[ws_idx].windows[win_idx].hwnd as _);
-                    
+                    let hwnd = HWND(
+                        self.monitors[monitor_idx].workspaces[ws_idx].windows[win_idx].hwnd as _,
+                    );
+
                     if let Ok(current_rect) = crate::windows_lib::get_window_rect(hwnd) {
-                        let window = &mut self.monitors[monitor_idx].workspaces[ws_idx].windows[win_idx];
-                        
+                        let window =
+                            &mut self.monitors[monitor_idx].workspaces[ws_idx].windows[win_idx];
+
                         let moved_from_last_known = window.rect.left != current_rect.left
                             || window.rect.top != current_rect.top
                             || window.rect.right != current_rect.right
