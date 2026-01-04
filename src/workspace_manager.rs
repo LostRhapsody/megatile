@@ -3,7 +3,7 @@ use crate::tiling::DwindleTiler;
 use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
+use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
 
 pub struct WorkspaceManager {
     monitors: Arc<Mutex<Vec<Monitor>>>,
@@ -541,6 +541,10 @@ impl WorkspaceManager {
 
     fn set_window_position(&self, hwnd: HWND, rect: &RECT) {
         unsafe {
+            // Restore the window if it's maximized, as SetWindowPos doesn't work on maximized windows
+            if IsZoomed(hwnd).as_bool() {
+                ShowWindow(hwnd, SW_RESTORE);
+            }
             SetWindowPos(
                 hwnd,
                 None,
