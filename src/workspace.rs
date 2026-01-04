@@ -17,6 +17,7 @@ pub struct Window {
     pub monitor: usize,
     pub rect: RECT,
     pub is_focused: bool,
+    pub is_tiled: bool,
     pub original_rect: RECT, // For restoring from fullscreen/hidden state
 }
 
@@ -28,6 +29,7 @@ impl Window {
             monitor,
             rect,
             is_focused: false,
+            is_tiled: true,
             original_rect: rect,
         }
     }
@@ -76,6 +78,10 @@ impl Workspace {
     }
 
     pub fn window_count(&self) -> usize {
+        self.windows.iter().filter(|w| w.is_tiled).count()
+    }
+
+    pub fn total_window_count(&self) -> usize {
         self.windows.len()
     }
 }

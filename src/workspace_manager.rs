@@ -4,7 +4,7 @@ use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsZoomed, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, ShowWindow,
+    IsZoomed, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
 };
 
 pub struct WorkspaceManager {
@@ -542,9 +542,54 @@ impl WorkspaceManager {
             let active_workspace = monitor.get_active_workspace();
 
             for window in &active_workspace.windows {
-                self.set_window_position(HWND(window.hwnd as _), &window.rect);
+                if window.is_tiled {
+                    self.set_window_position(HWND(window.hwnd as _), &window.rect);
+                }
             }
         }
+    }
+
+    pub fn toggle_window_tiling(&self, hwnd: HWND) -> Result<(), String> {
+        println!("DEBUG: Toggling tiling for window {:?}", hwnd.0);
+        let mut monitors = self.monitors.lock().unwrap();
+        let mut found = false;
+        let mut is_now_tiled = false;
+
+        for monitor in monitors.iter_mut() {
+            for workspace in &mut monitor.workspaces {
+                if let Some(window) = workspace.get_window_mut(hwnd) {
+                    window.is_tiled = !window.is_tiled;
+                    is_now_tiled = window.is_tiled;
+                    found = true;
+
+                    if !window.is_tiled {
+                        // If it's now floating, restore its original rect
+                        window.rect = window.original_rect;
+                    }
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+
+        if !found {
+            return Err("Window not found".to_string());
+        }
+
+        println!(
+            "DEBUG: Window {:?} is now {}",
+            hwnd.0,
+            if is_now_tiled { "tiled" } else { "floating" }
+        );
+
+        // Re-tile active workspaces
+        drop(monitors);
+        self.tile_active_workspaces();
+        self.apply_window_positions();
+
+        Ok(())
     }
 
     fn set_window_position(&self, hwnd: HWND, rect: &RECT) {
@@ -597,11 +642,13 @@ impl WorkspaceManager {
                 active_workspace.windows.len()
             );
             for window in &active_workspace.windows {
-                active_windows.push((window.clone(), window.rect));
-                println!(
-                    "DEBUG: Active window: hwnd={:?}, rect={:?}",
-                    window.hwnd, window.rect
-                );
+                if window.is_tiled {
+                    active_windows.push((window.clone(), window.rect));
+                    println!(
+                        "DEBUG: Active window: hwnd={:?}, rect={:?}",
+                        window.hwnd, window.rect
+                    );
+                }
             }
         }
 
@@ -770,11 +817,13 @@ impl WorkspaceManager {
                     active_workspace.windows.len()
                 );
                 for window in &active_workspace.windows {
-                    active_windows.push((window.clone(), window.rect));
-                    println!(
-                        "DEBUG: Window for moving: hwnd={:?}, rect={:?}",
-                        window.hwnd, window.rect
-                    );
+                    if window.is_tiled {
+                        active_windows.push((window.clone(), window.rect));
+                        println!(
+                            "DEBUG: Window for moving: hwnd={:?}, rect={:?}",
+                            window.hwnd, window.rect
+                        );
+                    }
                 }
             }
         }

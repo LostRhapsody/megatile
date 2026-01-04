@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use tray_icon::{
-    Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem},
+    Icon, TrayIcon, TrayIconBuilder,
 };
 
 pub static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);

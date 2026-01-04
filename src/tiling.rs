@@ -92,7 +92,7 @@ impl DwindleTiler {
     fn distribute_windows(&self, tile: &mut Tile, windows: &[Window]) {
         // Count active windows and collect their indices
         let window_indices: Vec<usize> = (0..windows.len())
-            .filter(|&i| windows[i].workspace > 0)
+            .filter(|&i| windows[i].workspace > 0 && windows[i].is_tiled)
             .collect();
 
         println!(

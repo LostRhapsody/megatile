@@ -17,11 +17,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tray::TrayManager;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, HWND_MESSAGE};
-use windows::core::PCWSTR;
 use windows_lib::{enumerate_monitors, get_normal_windows, show_window_in_taskbar};
 use workspace_manager::WorkspaceManager;
 
@@ -147,12 +147,16 @@ fn main() {
 
     // Enumerate windows and assign to workspace 1
     let normal_windows = get_normal_windows();
-    println!("Found {} normal windows", normal_windows.len());
+    println!("Found {} normal windows:", normal_windows.len());
 
     {
         let focused_hwnd = unsafe { GetForegroundWindow() };
         let wm = workspace_manager.lock().unwrap();
         for window_info in normal_windows {
+            println!(
+                "  - {} (Class: {})",
+                window_info.title, window_info.class_name
+            );
             let is_focused = window_info.hwnd == focused_hwnd;
             let monitor_index = wm.get_monitor_for_window(window_info.hwnd).unwrap_or(0);
             let mut window = workspace::Window::new(
@@ -357,6 +361,16 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
                     wm.print_workspace_status();
                 }
                 Err(e) => eprintln!("Failed to move window: {}", e),
+            }
+        }
+        hotkeys::HotkeyAction::ToggleTiling => {
+            let wm = workspace_manager.lock().unwrap();
+            if let Some(focused) = wm.get_focused_window() {
+                let hwnd = HWND(focused.hwnd as _);
+                drop(wm);
+                if let Err(e) = workspace_manager.lock().unwrap().toggle_window_tiling(hwnd) {
+                    eprintln!("Failed to toggle tiling: {}", e);
+                }
             }
         }
         hotkeys::HotkeyAction::CloseWindow => {

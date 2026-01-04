@@ -1,9 +1,10 @@
+use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE, WPARAM};
+use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::BOOL;
 
 const MONITORINFOF_PRIMARY: u32 = 1;
 
@@ -69,6 +70,22 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
             return false;
         }
 
+        if title == "Windows Input Experience" {
+            return false;
+        }
+
+        // Check for cloaked windows (hidden UWP apps, etc.)
+        let mut cloaked = 0u32;
+        let _ = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            &mut cloaked as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+        if cloaked != 0 {
+            return false;
+        }
+
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
 
         if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
@@ -87,6 +104,7 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
             "Progman",
             "DV2ControlHost",
             "XamlExplorerHostIslandWindow",
+            "Windows.UI.Core.CoreWindow",
         ];
 
         for sys_class in &system_classes {
