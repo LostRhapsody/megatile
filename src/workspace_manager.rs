@@ -4,7 +4,7 @@ use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsZoomed, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
+    IsZoomed, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, ShowWindow,
 };
 
 pub struct WorkspaceManager {

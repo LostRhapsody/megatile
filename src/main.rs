@@ -17,11 +17,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tray::TrayManager;
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, HWND_MESSAGE};
+use windows::core::PCWSTR;
 use windows_lib::{enumerate_monitors, get_normal_windows, show_window_in_taskbar};
 use workspace_manager::WorkspaceManager;
 
