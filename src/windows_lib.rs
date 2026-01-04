@@ -1,9 +1,9 @@
-use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE};
+use windows::core::BOOL;
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::BOOL;
 
 const MONITORINFOF_PRIMARY: u32 = 1;
 
@@ -210,4 +210,21 @@ pub fn enumerate_monitors() -> Vec<MonitorInfo> {
     }
 
     monitors
+}
+
+pub fn close_window(hwnd: HWND) -> Result<(), String> {
+    unsafe {
+        // Try to close gracefully by sending WM_CLOSE message
+        PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0))
+            .map_err(|e| format!("Failed to send WM_CLOSE: {}", e))?;
+        Ok(())
+    }
+}
+
+pub fn force_close_window(hwnd: HWND) -> Result<(), String> {
+    unsafe {
+        // Force terminate the window
+        DestroyWindow(hwnd).map_err(|e| format!("Failed to destroy window: {}", e))?;
+        Ok(())
+    }
 }

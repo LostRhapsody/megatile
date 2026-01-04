@@ -17,11 +17,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tray::TrayManager;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, HWND_MESSAGE};
-use windows::core::PCWSTR;
 use windows_lib::{enumerate_monitors, get_normal_windows, show_window_in_taskbar};
 use workspace_manager::WorkspaceManager;
 
@@ -357,6 +357,13 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
                     wm.print_workspace_status();
                 }
                 Err(e) => eprintln!("Failed to move window: {}", e),
+            }
+        }
+        hotkeys::HotkeyAction::CloseWindow => {
+            let mut wm = workspace_manager.lock().unwrap();
+            match wm.close_focused_window() {
+                Ok(()) => println!("Window closed successfully"),
+                Err(e) => eprintln!("Failed to close window: {}", e),
             }
         }
         _ => {

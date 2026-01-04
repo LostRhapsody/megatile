@@ -4,7 +4,7 @@ use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsZoomed, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, ShowWindow,
+    IsZoomed, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
 };
 
 pub struct WorkspaceManager {
@@ -943,6 +943,37 @@ impl WorkspaceManager {
                 }
             }
         }
+    }
+
+    pub fn close_focused_window(&mut self) -> Result<(), String> {
+        // Get currently focused window
+        let focused = self.get_focused_window();
+
+        if focused.is_none() {
+            return Err("No focused window".to_string());
+        }
+
+        let focused_window = focused.unwrap();
+        let hwnd = HWND(focused_window.hwnd as *mut std::ffi::c_void);
+
+        println!("Closing window {:?}", hwnd.0);
+
+        // Remove window from workspace tracking
+        let removed = self.remove_window(hwnd);
+
+        if removed.is_none() {
+            return Err("Window not found in workspace manager".to_string());
+        }
+
+        // Close the actual window
+        crate::windows_lib::close_window(hwnd)?;
+
+        // Re-tile active workspace
+        self.tile_active_workspaces();
+        self.apply_window_positions();
+
+        println!("Window closed and workspace re-tiled");
+        Ok(())
     }
 }
 
