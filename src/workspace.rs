@@ -69,10 +69,10 @@ impl Workspace {
         let removed = self.windows.remove(pos);
 
         // If we removed the focused window, try to focus another one
-        if self.focused_window_hwnd.is_none() {
-            if let Some(first_tiled) = self.windows.iter().find(|w| w.is_tiled) {
-                self.focused_window_hwnd = Some(first_tiled.hwnd);
-            }
+        if self.focused_window_hwnd.is_none()
+            && let Some(first_tiled) = self.windows.iter().find(|w| w.is_tiled)
+        {
+            self.focused_window_hwnd = Some(first_tiled.hwnd);
         }
 
         Some(removed)

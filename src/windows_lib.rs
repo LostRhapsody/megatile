@@ -1,11 +1,11 @@
-use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST,
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+    MonitorFromWindow,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::BOOL;
 
 const MONITORINFOF_PRIMARY: u32 = 1;
 

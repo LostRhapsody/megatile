@@ -15,11 +15,11 @@ use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tray::TrayManager;
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::PCWSTR;
 use windows_lib::{enumerate_monitors, get_normal_windows, show_window_in_taskbar};
 use workspace_manager::WorkspaceManager;
 
@@ -43,10 +43,10 @@ enum WindowEvent {
 static EVENT_QUEUE: OnceLock<Mutex<VecDeque<WindowEvent>>> = OnceLock::new();
 
 fn push_event(event: WindowEvent) {
-    if let Some(queue) = EVENT_QUEUE.get() {
-        if let Ok(mut q) = queue.lock() {
-            q.push_back(event);
-        }
+    if let Some(queue) = EVENT_QUEUE.get()
+        && let Ok(mut q) = queue.lock()
+    {
+        q.push_back(event);
     }
 }
 
@@ -178,10 +178,10 @@ fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
             }
         }
         hotkeys::HotkeyAction::ToggleTiling => {
-            if let Some(focused) = wm.get_focused_window() {
-                if let Err(e) = wm.toggle_window_tiling(HWND(focused.hwnd as _)) {
-                    eprintln!("Failed to toggle tiling: {}", e);
-                }
+            if let Some(focused) = wm.get_focused_window()
+                && let Err(e) = wm.toggle_window_tiling(HWND(focused.hwnd as _))
+            {
+                eprintln!("Failed to toggle tiling: {}", e);
             }
         }
         hotkeys::HotkeyAction::ToggleFullscreen => match wm.toggle_fullscreen() {
@@ -340,21 +340,21 @@ fn main() {
                     println!("Event: Window Created {:?}", hwnd);
                     // Filter windows here to avoid managing non-normal windows
                     let all_windows = windows_lib::enumerate_windows();
-                    if let Some(info) = all_windows.into_iter().find(|w| w.hwnd == hwnd) {
-                        if windows_lib::is_normal_window(hwnd, &info.class_name, &info.title) {
-                            let active_workspace = wm.get_active_workspace();
-                            let monitor_index = wm.get_monitor_for_window(hwnd).unwrap_or(0);
-                            let window = workspace::Window::new(
-                                hwnd_val,
-                                active_workspace,
-                                monitor_index,
-                                info.rect,
-                            );
-                            let _ = show_window_in_taskbar(hwnd);
-                            wm.add_window(window);
-                            wm.tile_active_workspaces();
-                            wm.apply_window_positions();
-                        }
+                    if let Some(info) = all_windows.into_iter().find(|w| w.hwnd == hwnd)
+                        && windows_lib::is_normal_window(hwnd, &info.class_name, &info.title)
+                    {
+                        let active_workspace = wm.get_active_workspace();
+                        let monitor_index = wm.get_monitor_for_window(hwnd).unwrap_or(0);
+                        let window = workspace::Window::new(
+                            hwnd_val,
+                            active_workspace,
+                            monitor_index,
+                            info.rect,
+                        );
+                        let _ = show_window_in_taskbar(hwnd);
+                        wm.add_window(window);
+                        wm.tile_active_workspaces();
+                        wm.apply_window_positions();
                     }
                 }
                 WindowEvent::WindowDestroyed(hwnd_val) => {

@@ -4,7 +4,7 @@ use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsZoomed, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
+    IsZoomed, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, ShowWindow,
 };
 
 pub struct WorkspaceManager {
@@ -51,7 +51,7 @@ impl WorkspaceManager {
     }
 
     pub fn get_monitor_for_window(&self, hwnd: HWND) -> Option<usize> {
-        use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
+        use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 
         let hmonitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
 
@@ -63,14 +63,13 @@ impl WorkspaceManager {
 
         // Fallback to containment check if hmonitor doesn't match
         for (i, monitor) in self.monitors.iter().enumerate() {
-            if let Ok(rect) = crate::windows_lib::get_window_rect(hwnd) {
-                if rect.left >= monitor.rect.left
-                    && rect.top >= monitor.rect.top
-                    && rect.right <= monitor.rect.right
-                    && rect.bottom <= monitor.rect.bottom
-                {
-                    return Some(i);
-                }
+            if let Ok(rect) = crate::windows_lib::get_window_rect(hwnd)
+                && rect.left >= monitor.rect.left
+                && rect.top >= monitor.rect.top
+                && rect.right <= monitor.rect.right
+                && rect.bottom <= monitor.rect.bottom
+            {
+                return Some(i);
             }
         }
 
@@ -259,14 +258,14 @@ impl WorkspaceManager {
             );
             if focused.workspace == old_workspace {
                 for monitor in self.monitors.iter_mut() {
-                    if let Some(workspace) = monitor.get_workspace_mut(old_workspace) {
-                        if workspace.get_window(HWND(focused.hwnd as _)).is_some() {
-                            workspace.focused_window_hwnd = Some(focused.hwnd);
-                            println!(
-                                "DEBUG: Saved focus target {:?} for old workspace {}",
-                                focused.hwnd, old_workspace
-                            );
-                        }
+                    if let Some(workspace) = monitor.get_workspace_mut(old_workspace)
+                        && workspace.get_window(HWND(focused.hwnd as _)).is_some()
+                    {
+                        workspace.focused_window_hwnd = Some(focused.hwnd);
+                        println!(
+                            "DEBUG: Saved focus target {:?} for old workspace {}",
+                            focused.hwnd, old_workspace
+                        );
                     }
                 }
             }
@@ -1120,10 +1119,10 @@ impl WorkspaceManager {
                         })
                         .map(|(i, _)| i);
 
-                    if let Some(new_idx) = new_monitor_idx {
-                        if new_idx != window.monitor {
-                            window.monitor = new_idx;
-                        }
+                    if let Some(new_idx) = new_monitor_idx
+                        && new_idx != window.monitor
+                    {
+                        window.monitor = new_idx;
                     }
                 }
             }
@@ -1178,11 +1177,11 @@ impl WorkspaceManager {
         let active_workspace_num = self.active_workspace_global;
         let mut next_focus = None;
         for monitor in self.monitors.iter() {
-            if let Some(workspace) = monitor.get_workspace(active_workspace_num) {
-                if let Some(hwnd) = workspace.focused_window_hwnd {
-                    next_focus = Some(HWND(hwnd as _));
-                    break;
-                }
+            if let Some(workspace) = monitor.get_workspace(active_workspace_num)
+                && let Some(hwnd) = workspace.focused_window_hwnd
+            {
+                next_focus = Some(HWND(hwnd as _));
+                break;
             }
         }
 
@@ -1208,26 +1207,26 @@ impl WorkspaceManager {
         // Find and update the window in workspace
         for monitor in self.monitors.iter_mut() {
             let monitor_rect = monitor.rect;
-            if let Some(workspace) = monitor.get_workspace_mut(monitor.active_workspace) {
-                if let Some(window) = workspace.get_window_mut(focused_hwnd) {
-                    if window.is_fullscreen {
-                        // Restore from fullscreen
-                        println!("Restoring window {:?} from fullscreen", focused_hwnd);
-                        crate::windows_lib::restore_window_from_fullscreen(
-                            focused_hwnd,
-                            window.original_rect,
-                        )?;
-                        window.is_fullscreen = false;
-                    } else {
-                        // Set to fullscreen
-                        println!("Setting window {:?} to fullscreen", focused_hwnd);
-                        window.original_rect = window.rect; // Store current position
-                        crate::windows_lib::set_window_fullscreen(focused_hwnd, monitor_rect)?;
-                        window.is_fullscreen = true;
-                    }
-
-                    return Ok(());
+            if let Some(workspace) = monitor.get_workspace_mut(monitor.active_workspace)
+                && let Some(window) = workspace.get_window_mut(focused_hwnd)
+            {
+                if window.is_fullscreen {
+                    // Restore from fullscreen
+                    println!("Restoring window {:?} from fullscreen", focused_hwnd);
+                    crate::windows_lib::restore_window_from_fullscreen(
+                        focused_hwnd,
+                        window.original_rect,
+                    )?;
+                    window.is_fullscreen = false;
+                } else {
+                    // Set to fullscreen
+                    println!("Setting window {:?} to fullscreen", focused_hwnd);
+                    window.original_rect = window.rect; // Store current position
+                    crate::windows_lib::set_window_fullscreen(focused_hwnd, monitor_rect)?;
+                    window.is_fullscreen = true;
                 }
+
+                return Ok(());
             }
         }
         Err("Window not found in active workspace".to_string())
