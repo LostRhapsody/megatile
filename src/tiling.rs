@@ -42,7 +42,7 @@ impl DwindleTiler {
     pub fn tile_windows(&self, monitor: &Monitor, windows: &mut [Window]) {
         let active_workspace = monitor.get_active_workspace();
         println!(
-            "DEBUG: Tiling active workspace: {} on monitor with rect {:?}",
+            "DEBUG: Tiling active workspace: {:?} on monitor with rect {:?}",
             active_workspace, monitor.rect
         );
         let window_count = active_workspace.window_count();

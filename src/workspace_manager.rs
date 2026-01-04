@@ -3,7 +3,9 @@ use crate::tiling::DwindleTiler;
 use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+use windows::Win32::UI::WindowsAndMessaging::{
+    IsZoomed, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
+};
 
 pub struct WorkspaceManager {
     monitors: Arc<Mutex<Vec<Monitor>>>,
@@ -247,18 +249,14 @@ impl WorkspaceManager {
         println!("DEBUG: Showing windows from workspace {}", new_workspace);
         self.show_workspace_windows(new_workspace)?;
 
-        // Update active workspace
+        // Update active workspace IMMEDIATELY after hide/show, before tiling
         println!(
             "DEBUG: Updating active workspace global to {}",
             new_workspace
         );
         self.active_workspace_global = new_workspace;
 
-        // Re-tile the workspace after hiding/showing windows.
-        println!("DEBUG: Re-tiling workspace after switching");
-        self.tile_active_workspaces();
-
-        // Update all monitors
+        // Update all monitors to reflect the new active workspace
         println!("DEBUG: Updating active workspace on all monitors");
         let mut monitors = self.monitors.lock().unwrap();
         for (i, monitor) in monitors.iter_mut().enumerate() {
@@ -268,11 +266,21 @@ impl WorkspaceManager {
             );
             monitor.set_active_workspace(new_workspace);
         }
-
-        // Re-tile the new workspace
         drop(monitors);
-        println!("DEBUG: Final tiling of new workspace {}", new_workspace);
+
+        // Now tile the new workspace with correct active workspace state
+        println!(
+            "DEBUG: Tiling new workspace {} with updated state",
+            new_workspace
+        );
         self.tile_active_workspaces();
+
+        // Apply window positions immediately
+        println!(
+            "DEBUG: Applying window positions for new workspace {}",
+            new_workspace
+        );
+        self.apply_window_positions();
 
         println!("DEBUG: Workspace switch completed successfully");
         Ok(())
@@ -543,7 +551,7 @@ impl WorkspaceManager {
         unsafe {
             // Restore the window if it's maximized, as SetWindowPos doesn't work on maximized windows
             if IsZoomed(hwnd).as_bool() {
-                ShowWindow(hwnd, SW_RESTORE);
+                let _ = ShowWindow(hwnd, SW_RESTORE);
             }
             SetWindowPos(
                 hwnd,
