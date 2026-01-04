@@ -32,13 +32,8 @@ pub fn enumerate_windows() -> Vec<WindowInfo> {
 unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let windows = unsafe { &mut *(lparam.0 as *mut Vec<WindowInfo>) };
 
-    let mut title_buffer = [0u16; 256];
-    let length = unsafe { GetWindowTextW(hwnd, &mut title_buffer) };
-    let title = String::from_utf16_lossy(&title_buffer[..length as usize]);
-
-    let mut class_buffer = [0u16; 256];
-    let class_len = unsafe { GetClassNameW(hwnd, &mut class_buffer) };
-    let class_name = String::from_utf16_lossy(&class_buffer[..class_len as usize]);
+    let title = get_window_title(hwnd);
+    let class_name = get_window_class(hwnd);
 
     let mut rect = RECT::default();
     unsafe {
@@ -59,6 +54,24 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL 
     });
 
     TRUE
+}
+
+pub fn get_window_title(hwnd: HWND) -> String {
+    let mut title_buffer = [0u16; 256];
+    let length = unsafe { GetWindowTextW(hwnd, &mut title_buffer) };
+    String::from_utf16_lossy(&title_buffer[..length as usize])
+}
+
+pub fn get_window_class(hwnd: HWND) -> String {
+    let mut class_buffer = [0u16; 256];
+    let class_len = unsafe { GetClassNameW(hwnd, &mut class_buffer) };
+    String::from_utf16_lossy(&class_buffer[..class_len as usize])
+}
+
+pub fn is_normal_window_hwnd(hwnd: HWND) -> bool {
+    let title = get_window_title(hwnd);
+    let class_name = get_window_class(hwnd);
+    is_normal_window(hwnd, &class_name, &title)
 }
 
 pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {

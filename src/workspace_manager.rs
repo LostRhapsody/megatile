@@ -1,7 +1,6 @@
 use super::workspace::{Monitor, Window};
 use crate::tiling::DwindleTiler;
 use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -9,7 +8,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 pub struct WorkspaceManager {
-    monitors: Arc<Mutex<Vec<Monitor>>>,
+    monitors: Vec<Monitor>,
     active_workspace_global: u8, // All monitors share the same active workspace
     last_reenumerate: Instant,
 }
@@ -17,13 +16,13 @@ pub struct WorkspaceManager {
 impl WorkspaceManager {
     pub fn new() -> Self {
         WorkspaceManager {
-            monitors: Arc::new(Mutex::new(Vec::new())),
+            monitors: Vec::new(),
             active_workspace_global: 1,
             last_reenumerate: Instant::now() - Duration::from_secs(60),
         }
     }
 
-    pub fn set_monitors(&self, monitors: Vec<Monitor>) {
+    pub fn set_monitors(&mut self, monitors: Vec<Monitor>) {
         println!("DEBUG: Setting {} monitors", monitors.len());
         for (i, monitor) in monitors.iter().enumerate() {
             println!(
@@ -31,8 +30,7 @@ impl WorkspaceManager {
                 i, monitor.hmonitor, monitor.rect, monitor.active_workspace
             );
         }
-        let mut m = self.monitors.lock().unwrap();
-        *m = monitors;
+        self.monitors = monitors;
         println!("DEBUG: Monitors set successfully");
     }
 
@@ -42,8 +40,7 @@ impl WorkspaceManager {
 
     pub fn get_all_managed_hwnds(&self) -> Vec<isize> {
         let mut hwnds = Vec::new();
-        let monitors = self.monitors.lock().unwrap();
-        for monitor in monitors.iter() {
+        for monitor in self.monitors.iter() {
             for workspace in &monitor.workspaces {
                 for window in &workspace.windows {
                     hwnds.push(window.hwnd);
@@ -58,15 +55,14 @@ impl WorkspaceManager {
 
         let hmonitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
 
-        let monitors = self.monitors.lock().unwrap();
-        for (i, monitor) in monitors.iter().enumerate() {
+        for (i, monitor) in self.monitors.iter().enumerate() {
             if monitor.hmonitor == hmonitor.0 as isize {
                 return Some(i);
             }
         }
 
         // Fallback to containment check if hmonitor doesn't match
-        for (i, monitor) in monitors.iter().enumerate() {
+        for (i, monitor) in self.monitors.iter().enumerate() {
             if let Ok(rect) = crate::windows_lib::get_window_rect(hwnd) {
                 if rect.left >= monitor.rect.left
                     && rect.top >= monitor.rect.top
@@ -81,29 +77,12 @@ impl WorkspaceManager {
         None
     }
 
-    pub fn switch_workspace(&mut self, workspace_num: u8) -> bool {
-        if !(1..=9).contains(&workspace_num) {
-            return false;
-        }
-
-        self.active_workspace_global = workspace_num;
-
-        // Update all monitors
-        let mut monitors = self.monitors.lock().unwrap();
-        for monitor in monitors.iter_mut() {
-            monitor.set_active_workspace(workspace_num);
-        }
-
-        true
-    }
-
-    pub fn add_window(&self, window: Window) {
+    pub fn add_window(&mut self, window: Window) {
         println!(
             "DEBUG: Adding window {:?} to workspace {} on monitor {}",
             window.hwnd, window.workspace, window.monitor
         );
-        let mut monitors = self.monitors.lock().unwrap();
-        if let Some(monitor) = monitors.get_mut(window.monitor) {
+        if let Some(monitor) = self.monitors.get_mut(window.monitor) {
             println!(
                 "DEBUG: Monitor {} found, adding window to workspace {}",
                 window.monitor, window.workspace
@@ -118,10 +97,9 @@ impl WorkspaceManager {
         }
     }
 
-    pub fn remove_window(&self, hwnd: HWND) -> Option<Window> {
+    pub fn remove_window(&mut self, hwnd: HWND) -> Option<Window> {
         println!("DEBUG: Removing window {:?}", hwnd.0);
-        let mut monitors = self.monitors.lock().unwrap();
-        for (monitor_idx, monitor) in monitors.iter_mut().enumerate() {
+        for (monitor_idx, monitor) in self.monitors.iter_mut().enumerate() {
             println!(
                 "DEBUG: Checking monitor {} for window {:?}",
                 monitor_idx, hwnd.0
@@ -134,11 +112,11 @@ impl WorkspaceManager {
                 return Some(window);
             }
         }
-        println!("DEBUG: Window {:?} not found in any monitor", hwnd.0);
+        println!("DEBUG: Window {:?} not found", hwnd.0);
         None
     }
 
-    pub fn remove_window_with_tiling(&self, hwnd: HWND) -> Option<Window> {
+    pub fn remove_window_with_tiling(&mut self, hwnd: HWND) -> Option<Window> {
         println!("DEBUG: Removing window with tiling update: {:?}", hwnd.0);
         let removed_window = self.remove_window(hwnd);
 
@@ -159,8 +137,7 @@ impl WorkspaceManager {
     }
 
     pub fn get_window(&self, hwnd: HWND) -> Option<Window> {
-        let monitors = self.monitors.lock().unwrap();
-        for monitor in monitors.iter() {
+        for monitor in self.monitors.iter() {
             if let Some(window) = monitor.get_window(hwnd) {
                 return Some(window.clone());
             }
@@ -169,8 +146,7 @@ impl WorkspaceManager {
     }
 
     pub fn get_active_workspace_windows(&self, monitor_index: usize) -> Vec<Window> {
-        let monitors = self.monitors.lock().unwrap();
-        if let Some(monitor) = monitors.get(monitor_index) {
+        if let Some(monitor) = self.monitors.get(monitor_index) {
             monitor.get_active_workspace().windows.clone()
         } else {
             Vec::new()
@@ -190,7 +166,6 @@ impl WorkspaceManager {
         let monitor_infos = crate::windows_lib::enumerate_monitors();
         println!("Found {} monitor(s)", monitor_infos.len());
 
-        let mut monitors_guard = self.monitors.lock().unwrap();
         let mut new_monitors: Vec<Monitor> = Vec::new();
 
         for (i, info) in monitor_infos.iter().enumerate() {
@@ -198,7 +173,7 @@ impl WorkspaceManager {
 
             // Try to preserve workspace data from existing monitor by matching hmonitor
             let existing_workspace_data = if let Some(old_monitor) =
-                monitors_guard.iter().find(|m| m.hmonitor == info.hmonitor)
+                self.monitors.iter().find(|m| m.hmonitor == info.hmonitor)
             {
                 old_monitor.workspaces.clone()
             } else {
@@ -212,8 +187,7 @@ impl WorkspaceManager {
         }
 
         // Update monitors
-        *monitors_guard = new_monitors;
-        drop(monitors_guard);
+        self.monitors = new_monitors;
 
         // Re-tile active workspace on all monitors
         self.tile_active_workspaces();
@@ -225,18 +199,16 @@ impl WorkspaceManager {
 
     pub fn check_monitor_changes(&mut self) -> bool {
         let current_infos = crate::windows_lib::enumerate_monitors();
-        let monitors = self.monitors.lock().unwrap();
-
-        if current_infos.len() != monitors.len() {
+        if current_infos.len() != self.monitors.len() {
             return true;
         }
 
         for (i, info) in current_infos.iter().enumerate() {
-            if info.hmonitor != monitors[i].hmonitor
-                || info.rect.left != monitors[i].rect.left
-                || info.rect.top != monitors[i].rect.top
-                || info.rect.right != monitors[i].rect.right
-                || info.rect.bottom != monitors[i].rect.bottom
+            if info.hmonitor != self.monitors[i].hmonitor
+                || info.rect.left != self.monitors[i].rect.left
+                || info.rect.top != self.monitors[i].rect.top
+                || info.rect.right != self.monitors[i].rect.right
+                || info.rect.bottom != self.monitors[i].rect.bottom
             {
                 return true;
             }
@@ -246,9 +218,8 @@ impl WorkspaceManager {
     }
 
     pub fn get_workspace_window_count(&self, workspace_num: u8) -> usize {
-        let monitors = self.monitors.lock().unwrap();
         let mut count = 0;
-        for monitor in monitors.iter() {
+        for monitor in self.monitors.iter() {
             if let Some(workspace) = monitor.get_workspace(workspace_num) {
                 count += workspace.windows.len();
             }
@@ -287,8 +258,7 @@ impl WorkspaceManager {
                 focused.hwnd, focused.workspace
             );
             if focused.workspace == old_workspace {
-                let mut monitors = self.monitors.lock().unwrap();
-                for monitor in monitors.iter_mut() {
+                for monitor in self.monitors.iter_mut() {
                     if let Some(workspace) = monitor.get_workspace_mut(old_workspace) {
                         if workspace.get_window(HWND(focused.hwnd as _)).is_some() {
                             workspace.focused_window_hwnd = Some(focused.hwnd);
@@ -343,15 +313,13 @@ impl WorkspaceManager {
 
         // Update all monitors to reflect the new active workspace
         println!("DEBUG: Updating active workspace on all monitors");
-        let mut monitors = self.monitors.lock().unwrap();
-        for (i, monitor) in monitors.iter_mut().enumerate() {
+        for (i, monitor) in self.monitors.iter_mut().enumerate() {
             println!(
                 "DEBUG: Setting monitor {} active workspace to {}",
                 i, new_workspace
             );
             monitor.set_active_workspace(new_workspace);
         }
-        drop(monitors);
 
         // Now tile the new workspace with correct active workspace state
         println!(
@@ -370,27 +338,24 @@ impl WorkspaceManager {
         // Restore focus for the new workspace
         println!("DEBUG: Restoring focus for workspace {}", new_workspace);
         let mut focus_target = None;
-        {
-            let monitors = self.monitors.lock().unwrap();
-            for monitor in monitors.iter() {
-                if let Some(workspace) = monitor.get_workspace(new_workspace) {
-                    if let Some(hwnd) = workspace.focused_window_hwnd {
-                        focus_target = Some(HWND(hwnd as _));
-                        println!(
-                            "DEBUG: Found remembered focus target {:?} for workspace {}",
-                            hwnd, new_workspace
-                        );
-                        break;
-                    }
-                    // If no remembered focus, try the first tiled window
-                    if let Some(first_window) = workspace.windows.iter().find(|w| w.is_tiled) {
-                        focus_target = Some(HWND(first_window.hwnd as _));
-                        println!(
-                            "DEBUG: No remembered focus, using first tiled window {:?} for workspace {}",
-                            first_window.hwnd, new_workspace
-                        );
-                        break;
-                    }
+        for monitor in self.monitors.iter() {
+            if let Some(workspace) = monitor.get_workspace(new_workspace) {
+                if let Some(hwnd) = workspace.focused_window_hwnd {
+                    focus_target = Some(HWND(hwnd as _));
+                    println!(
+                        "DEBUG: Found remembered focus target {:?} for workspace {}",
+                        hwnd, new_workspace
+                    );
+                    break;
+                }
+                // If no remembered focus, try the first tiled window
+                if let Some(first_window) = workspace.windows.iter().find(|w| w.is_tiled) {
+                    focus_target = Some(HWND(first_window.hwnd as _));
+                    println!(
+                        "DEBUG: No remembered focus, using first tiled window {:?} for workspace {}",
+                        first_window.hwnd, new_workspace
+                    );
+                    break;
                 }
             }
         }
@@ -410,13 +375,12 @@ impl WorkspaceManager {
     }
 
     fn hide_workspace_windows(&self, workspace_num: u8) -> Result<(), String> {
-        let monitors = self.monitors.lock().unwrap();
         let mut total_hidden = 0;
         let mut failed_count = 0;
 
         println!("DEBUG: Hiding windows for workspace {}", workspace_num);
 
-        for (monitor_idx, monitor) in monitors.iter().enumerate() {
+        for (monitor_idx, monitor) in self.monitors.iter().enumerate() {
             if let Some(workspace) = monitor.get_workspace(workspace_num) {
                 println!(
                     "DEBUG: Monitor {} has {} windows in workspace {}",
@@ -449,13 +413,12 @@ impl WorkspaceManager {
     }
 
     fn show_workspace_windows(&self, workspace_num: u8) -> Result<(), String> {
-        let monitors = self.monitors.lock().unwrap();
         let mut total_shown = 0;
         let mut failed_count = 0;
 
         println!("DEBUG: Showing windows for workspace {}", workspace_num);
 
-        for (monitor_idx, monitor) in monitors.iter().enumerate() {
+        for (monitor_idx, monitor) in self.monitors.iter().enumerate() {
             if let Some(workspace) = monitor.get_workspace(workspace_num) {
                 println!(
                     "DEBUG: Monitor {} has {} windows in workspace {}",
@@ -525,10 +488,11 @@ impl WorkspaceManager {
         // Remove window from current workspace
         let mut window_to_move = None;
         let mut source_monitor_idx = 0;
+        let mut should_switch = false;
+        let mut result = Err("Window not found".to_string());
 
-        let mut monitors = self.monitors.lock().unwrap();
         println!("DEBUG: Searching for window in monitors to remove");
-        for (m_idx, monitor) in monitors.iter_mut().enumerate() {
+        for (m_idx, monitor) in self.monitors.iter_mut().enumerate() {
             if let Some(workspace) = monitor.get_workspace_mut(old_workspace) {
                 println!(
                     "DEBUG: Checking monitor {} workspace {} for window",
@@ -552,7 +516,7 @@ impl WorkspaceManager {
             println!("DEBUG: Updated window workspace to {}", new_workspace);
 
             // Keep window on same monitor (find target workspace on same monitor)
-            if let Some(monitor) = monitors.get_mut(source_monitor_idx) {
+            if let Some(monitor) = self.monitors.get_mut(source_monitor_idx) {
                 if let Some(workspace) = monitor.get_workspace_mut(new_workspace) {
                     let hwnd_val = window.hwnd;
                     workspace.add_window(window.clone());
@@ -584,7 +548,7 @@ impl WorkspaceManager {
                 println!("DEBUG: Source workspace is active, re-tiling after window removal");
                 // Source workspace is currently active, so tile it
                 let tiler = DwindleTiler::default();
-                if let Some(monitor) = monitors.get_mut(source_monitor_idx) {
+                if let Some(monitor) = self.monitors.get_mut(source_monitor_idx) {
                     let workspace_idx = (old_workspace - 1) as usize;
                     if !monitor.workspaces[workspace_idx].windows.is_empty() {
                         println!(
@@ -605,7 +569,7 @@ impl WorkspaceManager {
 
                 // Apply the new positions immediately
                 println!("DEBUG: Applying new positions to remaining windows in source workspace");
-                for monitor in monitors.iter() {
+                for monitor in self.monitors.iter() {
                     if monitor.active_workspace == old_workspace {
                         let active_workspace = monitor.get_active_workspace();
                         for win in &active_workspace.windows {
@@ -624,19 +588,23 @@ impl WorkspaceManager {
                 );
             }
 
-            // Switch to the target workspace to show the moved window
-            drop(monitors);
+            should_switch = true;
+            result = Ok(());
+        } else {
+            println!("DEBUG: Window {:?} not found in any workspace", hwnd.0);
+            result = Err("Window not found".to_string());
+        }
+
+        if should_switch {
             println!(
                 "DEBUG: Switching to target workspace {} to show moved window",
                 new_workspace
             );
             self.switch_workspace_with_windows(new_workspace)?;
             println!("DEBUG: Window move to workspace completed successfully");
-            Ok(())
-        } else {
-            println!("DEBUG: Window {:?} not found in any workspace", hwnd.0);
-            Err("Window not found".to_string())
         }
+
+        result
     }
 
     pub fn move_window_to_workspace_follow(&mut self, new_workspace: u8) -> Result<(), String> {
@@ -644,11 +612,9 @@ impl WorkspaceManager {
         self.move_window_to_workspace(new_workspace)
     }
 
-    pub fn tile_active_workspaces(&self) {
+    pub fn tile_active_workspaces(&mut self) {
         let tiler = DwindleTiler::default();
-        let mut monitors = self.monitors.lock().unwrap();
-
-        for monitor in monitors.iter_mut() {
+        for monitor in self.monitors.iter_mut() {
             let workspace_idx = (monitor.active_workspace - 1) as usize;
 
             if !monitor.workspaces[workspace_idx].windows.is_empty() {
@@ -661,9 +627,7 @@ impl WorkspaceManager {
     }
 
     pub fn apply_window_positions(&self) {
-        let monitors = self.monitors.lock().unwrap();
-
-        for monitor in monitors.iter() {
+        for monitor in self.monitors.iter() {
             let active_workspace = monitor.get_active_workspace();
 
             for window in &active_workspace.windows {
@@ -674,13 +638,13 @@ impl WorkspaceManager {
         }
     }
 
-    pub fn toggle_window_tiling(&self, hwnd: HWND) -> Result<(), String> {
+    pub fn toggle_window_tiling(&mut self, hwnd: HWND) -> Result<(), String> {
         println!("DEBUG: Toggling tiling for window {:?}", hwnd.0);
-        let mut monitors = self.monitors.lock().unwrap();
         let mut found = false;
         let mut is_now_tiled = false;
+        let mut rect_to_restore = None;
 
-        for monitor in monitors.iter_mut() {
+        for monitor in self.monitors.iter_mut() {
             for workspace in &mut monitor.workspaces {
                 if let Some(window) = workspace.get_window_mut(hwnd) {
                     window.is_tiled = !window.is_tiled;
@@ -690,6 +654,7 @@ impl WorkspaceManager {
                     if !window.is_tiled {
                         // If it's now floating, restore its original rect
                         window.rect = window.original_rect;
+                        rect_to_restore = Some(window.original_rect);
                     }
                     break;
                 }
@@ -702,21 +667,6 @@ impl WorkspaceManager {
         if !found {
             return Err("Window not found".to_string());
         }
-
-        let rect_to_restore = if !is_now_tiled {
-            let mut r = None;
-            for monitor in monitors.iter() {
-                if let Some(window) = monitor.get_window(hwnd) {
-                    r = Some(window.original_rect);
-                    break;
-                }
-            }
-            r
-        } else {
-            None
-        };
-
-        drop(monitors);
 
         if let Some(rect) = rect_to_restore {
             self.set_window_position(hwnd, &rect);
@@ -763,7 +713,7 @@ impl WorkspaceManager {
         }
     }
 
-    pub fn move_focus(&self, direction: FocusDirection) -> Result<(), String> {
+    pub fn move_focus(&mut self, direction: FocusDirection) -> Result<(), String> {
         println!("DEBUG: Moving focus in direction {:?}", direction);
 
         let focused = self.get_focused_window();
@@ -772,27 +722,23 @@ impl WorkspaceManager {
             focused.as_ref().map(|w| w.hwnd)
         );
 
-        // Find all windows in active workspace on all monitors
+        // Find all windows in active workspace on all monitors first
         let mut active_windows: Vec<(Window, RECT)> = Vec::new();
-        {
-            let monitors = self.monitors.lock().unwrap();
-
-            println!("DEBUG: Gathering active windows from all monitors");
-            for (monitor_idx, monitor) in monitors.iter().enumerate() {
-                let active_workspace = monitor.get_active_workspace();
-                println!(
-                    "DEBUG: Monitor {} active workspace has {} windows",
-                    monitor_idx,
-                    active_workspace.windows.len()
-                );
-                for window in &active_workspace.windows {
-                    if window.is_tiled {
-                        active_windows.push((window.clone(), window.rect));
-                        println!(
-                            "DEBUG: Active window: hwnd={:?}, rect={:?}",
-                            window.hwnd, window.rect
-                        );
-                    }
+        println!("DEBUG: Gathering active windows from all monitors");
+        for (monitor_idx, monitor) in self.monitors.iter().enumerate() {
+            let active_workspace = monitor.get_active_workspace();
+            println!(
+                "DEBUG: Monitor {} active workspace has {} windows",
+                monitor_idx,
+                active_workspace.windows.len()
+            );
+            for window in &active_workspace.windows {
+                if window.is_tiled {
+                    active_windows.push((window.clone(), window.rect));
+                    println!(
+                        "DEBUG: Active window: hwnd={:?}, rect={:?}",
+                        window.hwnd, window.rect
+                    );
                 }
             }
         }
@@ -932,26 +878,23 @@ impl WorkspaceManager {
         result
     }
 
-    pub fn set_window_focus(&self, hwnd: HWND) {
+    pub fn set_window_focus(&mut self, hwnd: HWND) {
         use windows::Win32::UI::WindowsAndMessaging::*;
 
         println!("DEBUG: Setting focus to window {:?}", hwnd.0);
 
         // Update focus memory in the workspace
-        {
-            let mut monitors = self.monitors.lock().unwrap();
-            let mut found = false;
-            for monitor in monitors.iter_mut() {
-                for workspace in &mut monitor.workspaces {
-                    if workspace.get_window(hwnd).is_some() {
-                        workspace.focused_window_hwnd = Some(hwnd.0 as isize);
-                        found = true;
-                        break;
-                    }
-                }
-                if found {
+        let mut found = false;
+        for monitor in self.monitors.iter_mut() {
+            for workspace in &mut monitor.workspaces {
+                if workspace.get_window(hwnd).is_some() {
+                    workspace.focused_window_hwnd = Some(hwnd.0 as isize);
+                    found = true;
                     break;
                 }
+            }
+            if found {
+                break;
             }
         }
 
@@ -965,29 +908,26 @@ impl WorkspaceManager {
         }
     }
 
-    pub fn move_window(&self, direction: FocusDirection) -> Result<(), String> {
+    pub fn move_window(&mut self, direction: FocusDirection) -> Result<(), String> {
         println!("DEBUG: Moving window in direction {:?}", direction);
 
         // Find all windows in active workspace on all monitors first
         let mut active_windows: Vec<(Window, RECT)> = Vec::new();
-        {
-            let monitors = self.monitors.lock().unwrap();
-            println!("DEBUG: Gathering active windows for moving");
-            for (monitor_idx, monitor) in monitors.iter().enumerate() {
-                let active_workspace = monitor.get_active_workspace();
-                println!(
-                    "DEBUG: Monitor {} has {} windows in active workspace",
-                    monitor_idx,
-                    active_workspace.windows.len()
-                );
-                for window in &active_workspace.windows {
-                    if window.is_tiled {
-                        active_windows.push((window.clone(), window.rect));
-                        println!(
-                            "DEBUG: Window for moving: hwnd={:?}, rect={:?}",
-                            window.hwnd, window.rect
-                        );
-                    }
+        println!("DEBUG: Gathering active windows for moving");
+        for (monitor_idx, monitor) in self.monitors.iter().enumerate() {
+            let active_workspace = monitor.get_active_workspace();
+            println!(
+                "DEBUG: Monitor {} has {} windows in active workspace",
+                monitor_idx,
+                active_workspace.windows.len()
+            );
+            for window in &active_workspace.windows {
+                if window.is_tiled {
+                    active_windows.push((window.clone(), window.rect));
+                    println!(
+                        "DEBUG: Window for moving: hwnd={:?}, rect={:?}",
+                        window.hwnd, window.rect
+                    );
                 }
             }
         }
@@ -1072,19 +1012,17 @@ impl WorkspaceManager {
         Ok(())
     }
 
-    fn swap_window_positions(&self, hwnd1: HWND, hwnd2: HWND) -> Result<(), String> {
+    fn swap_window_positions(&mut self, hwnd1: HWND, hwnd2: HWND) -> Result<(), String> {
         println!(
             "DEBUG: Swapping positions of windows {:?} and {:?}",
             hwnd1.0, hwnd2.0
         );
-        let mut monitors = self.monitors.lock().unwrap();
-
         // Find both windows and swap their rects
         let mut window1_info: Option<(usize, usize, RECT)> = None;
         let mut window2_info: Option<(usize, usize, RECT)> = None;
 
         println!("DEBUG: Searching for windows in active workspaces");
-        for (monitor_idx, monitor) in monitors.iter().enumerate() {
+        for (monitor_idx, monitor) in self.monitors.iter().enumerate() {
             let workspace_idx = (monitor.active_workspace - 1) as usize;
             println!(
                 "DEBUG: Checking monitor {} active workspace {} (index {})",
@@ -1112,16 +1050,16 @@ impl WorkspaceManager {
             (Some((m1, w1, rect1)), Some((m2, w2, rect2))) => {
                 println!("DEBUG: Both windows found, proceeding with swap");
                 // Store workspace indices to avoid borrowing issues
-                let ws1_idx = (monitors[m1].active_workspace - 1) as usize;
-                let ws2_idx = (monitors[m2].active_workspace - 1) as usize;
+                let ws1_idx = (self.monitors[m1].active_workspace - 1) as usize;
+                let ws2_idx = (self.monitors[m2].active_workspace - 1) as usize;
 
                 println!(
                     "DEBUG: Swapping rects: window1 gets {:?}, window2 gets {:?}",
                     rect2, rect1
                 );
                 // Swap the rects
-                monitors[m1].workspaces[ws1_idx].windows[w1].rect = rect2;
-                monitors[m2].workspaces[ws2_idx].windows[w2].rect = rect1;
+                self.monitors[m1].workspaces[ws1_idx].windows[w1].rect = rect2;
+                self.monitors[m2].workspaces[ws2_idx].windows[w2].rect = rect1;
                 println!("DEBUG: Window position swap completed successfully");
                 Ok(())
             }
@@ -1140,21 +1078,16 @@ impl WorkspaceManager {
         }
     }
 
-    pub fn update_window_positions(&self) {
+    pub fn update_window_positions(&mut self) {
         use crate::windows_lib::get_normal_windows;
         let current_windows = get_normal_windows();
 
-        // Get monitor rects first to avoid borrow conflicts and double locking
-        let monitor_rects: Vec<RECT> = {
-            let monitors = self.monitors.lock().unwrap();
-            monitors.iter().map(|m| m.rect).collect()
-        };
-
-        let mut monitors = self.monitors.lock().unwrap();
+        // Get monitor rects first
+        let monitor_rects: Vec<RECT> = self.monitors.iter().map(|m| m.rect).collect();
 
         for win_info in current_windows {
             let hwnd_val = win_info.hwnd.0 as isize;
-            for monitor in monitors.iter_mut() {
+            for monitor in self.monitors.iter_mut() {
                 if let Some(window) = monitor.find_window_by_hwnd_mut(hwnd_val) {
                     let moved_from_last_known = window.rect.left != win_info.rect.left
                         || window.rect.top != win_info.rect.top
@@ -1196,9 +1129,9 @@ impl WorkspaceManager {
             }
         }
     }
+
     pub fn print_workspace_status(&self) {
-        let monitors = self.monitors.lock().unwrap();
-        for (m_idx, monitor) in monitors.iter().enumerate() {
+        for (m_idx, monitor) in self.monitors.iter().enumerate() {
             println!("Monitor {}:", m_idx);
             for ws in 1..=9 {
                 if let Some(workspace) = monitor.get_workspace(ws) {
@@ -1244,14 +1177,11 @@ impl WorkspaceManager {
         // Focus the next window in the workspace
         let active_workspace_num = self.active_workspace_global;
         let mut next_focus = None;
-        {
-            let monitors = self.monitors.lock().unwrap();
-            for monitor in monitors.iter() {
-                if let Some(workspace) = monitor.get_workspace(active_workspace_num) {
-                    if let Some(hwnd) = workspace.focused_window_hwnd {
-                        next_focus = Some(HWND(hwnd as _));
-                        break;
-                    }
+        for monitor in self.monitors.iter() {
+            if let Some(workspace) = monitor.get_workspace(active_workspace_num) {
+                if let Some(hwnd) = workspace.focused_window_hwnd {
+                    next_focus = Some(HWND(hwnd as _));
+                    break;
                 }
             }
         }
@@ -1276,9 +1206,7 @@ impl WorkspaceManager {
         let focused_hwnd = HWND(focused.unwrap().hwnd as _);
 
         // Find and update the window in workspace
-        let mut monitors = self.monitors.lock().unwrap();
-
-        for monitor in monitors.iter_mut() {
+        for monitor in self.monitors.iter_mut() {
             let monitor_rect = monitor.rect;
             if let Some(workspace) = monitor.get_workspace_mut(monitor.active_workspace) {
                 if let Some(window) = workspace.get_window_mut(focused_hwnd) {
@@ -1302,14 +1230,11 @@ impl WorkspaceManager {
                 }
             }
         }
-
         Err("Window not found in active workspace".to_string())
     }
 
     pub fn exit_fullscreen_all(&mut self) {
-        let mut monitors = self.monitors.lock().unwrap();
-
-        for monitor in monitors.iter_mut() {
+        for monitor in self.monitors.iter_mut() {
             for workspace in &mut monitor.workspaces {
                 for window in &mut workspace.windows {
                     if window.is_fullscreen {
@@ -1325,10 +1250,8 @@ impl WorkspaceManager {
         }
     }
 
-    fn exit_fullscreen_workspace(&self, workspace_num: u8) {
-        let mut monitors = self.monitors.lock().unwrap();
-
-        for monitor in monitors.iter_mut() {
+    fn exit_fullscreen_workspace(&mut self, workspace_num: u8) {
+        for monitor in self.monitors.iter_mut() {
             if let Some(workspace) = monitor.get_workspace_mut(workspace_num) {
                 for window in &mut workspace.windows {
                     if window.is_fullscreen {

@@ -11,17 +11,15 @@ mod workspace;
 mod workspace_manager;
 
 use hotkeys::HotkeyManager;
-use std::collections::HashSet;
-
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::collections::VecDeque;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tray::TrayManager;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, HWND_MESSAGE};
 use windows_lib::{enumerate_monitors, get_normal_windows, show_window_in_taskbar};
 use workspace_manager::WorkspaceManager;
 
@@ -31,237 +29,56 @@ static CLASS_NAME: [u16; 22] = [
 ];
 static TITLE: [u16; 9] = [77, 101, 103, 97, 84, 105, 108, 101, 0];
 
-fn start_window_monitoring(workspace_manager: Arc<Mutex<WorkspaceManager>>) {
-    thread::spawn(move || {
-        let mut previous_hwnds: std::collections::HashSet<isize> = {
-            let wm = workspace_manager.lock().unwrap();
-            wm.get_all_managed_hwnds().into_iter().collect()
-        };
+#[derive(Debug)]
+enum WindowEvent {
+    Hotkey(hotkeys::HotkeyAction),
+    WindowCreated(isize),
+    WindowDestroyed(isize),
+    WindowMoved(isize),
+    DisplayChange,
+    PeriodicCheck,
+    TrayExit,
+}
 
-        loop {
-            let current_hwnds: std::collections::HashSet<isize> = {
-                let wm = workspace_manager.lock().unwrap();
-                wm.get_all_managed_hwnds().into_iter().collect()
-            };
+static EVENT_QUEUE: OnceLock<Mutex<VecDeque<WindowEvent>>> = OnceLock::new();
 
-            // Update window positions (track user moves)
-            {
-                let wm = workspace_manager.lock().unwrap();
-                wm.update_window_positions();
-            }
-
-            // Detect closed windows
-            let closed_hwnds: Vec<isize> =
-                previous_hwnds.difference(&current_hwnds).cloned().collect();
-            for hwnd in closed_hwnds {
-                println!("Window {:?} was closed, removing from workspace", hwnd);
-                let wm = workspace_manager.lock().unwrap();
-                wm.remove_window_with_tiling(HWND(hwnd as *mut std::ffi::c_void));
-            }
-
-            // Detect new windows
-            let new_windows = detect_new_windows(&workspace_manager);
-            if !new_windows.is_empty() {
-                manage_new_windows(&workspace_manager, new_windows);
-            }
-
-            // Update previous_hwnds for next iteration
-            previous_hwnds = current_hwnds;
-
-            thread::sleep(Duration::from_millis(500));
+fn push_event(event: WindowEvent) {
+    if let Some(queue) = EVENT_QUEUE.get() {
+        if let Ok(mut q) = queue.lock() {
+            q.push_back(event);
         }
-    });
+    }
 }
 
-fn detect_new_windows(
-    workspace_manager: &Arc<Mutex<WorkspaceManager>>,
-) -> Vec<windows_lib::WindowInfo> {
-    let existing_hwnds: HashSet<isize> = {
-        let wm = workspace_manager.lock().unwrap();
-        wm.get_all_managed_hwnds().into_iter().collect()
-    };
-
-    let all_windows = windows_lib::get_normal_windows();
-    all_windows
-        .into_iter()
-        .filter(|w| !existing_hwnds.contains(&(w.hwnd.0 as isize)))
-        .collect()
-}
-
-fn manage_new_windows(
-    workspace_manager: &Arc<Mutex<WorkspaceManager>>,
-    new_windows: Vec<windows_lib::WindowInfo>,
+unsafe extern "system" fn win_event_proc(
+    _hwin_event_hook: HWINEVENTHOOK,
+    event: u32,
+    hwnd: HWND,
+    id_object: i32,
+    id_child: i32,
+    _id_event_thread: u32,
+    _dwms_event_time: u32,
 ) {
-    let wm = workspace_manager.lock().unwrap();
-    let active_workspace = wm.get_active_workspace();
-
-    for window_info in &new_windows {
-        let monitor_index = wm.get_monitor_for_window(window_info.hwnd).unwrap_or(0);
-
-        let window = workspace::Window::new(
-            window_info.hwnd.0 as isize,
-            active_workspace,
-            monitor_index,
-            window_info.rect,
-        );
-
-        if active_workspace == wm.get_active_workspace() {
-            let _ = show_window_in_taskbar(HWND(window.hwnd as *mut std::ffi::c_void));
-        } else {
-            let _ =
-                windows_lib::hide_window_from_taskbar(HWND(window.hwnd as *mut std::ffi::c_void));
-        }
-
-        wm.add_window(window);
+    if id_object != OBJID_WINDOW.0 || id_child != CHILDID_SELF as i32 || hwnd.0.is_null() {
+        return;
     }
 
-    if !new_windows.is_empty() {
-        wm.tile_active_workspaces();
-        wm.apply_window_positions();
+    match event {
+        EVENT_OBJECT_CREATE => {
+            push_event(WindowEvent::WindowCreated(hwnd.0 as isize));
+        }
+        EVENT_OBJECT_DESTROY => {
+            push_event(WindowEvent::WindowDestroyed(hwnd.0 as isize));
+        }
+        EVENT_OBJECT_LOCATIONCHANGE => {
+            push_event(WindowEvent::WindowMoved(hwnd.0 as isize));
+        }
+        _ => {}
     }
 }
 
-fn main() {
-    println!("MegaTile - Window Manager");
-
-    // Initialize workspace manager
-    let workspace_manager = Arc::new(Mutex::new(WorkspaceManager::new()));
-
-    // Setup Ctrl+C handler for cleanup
-    let wm_for_ctrlc = Arc::clone(&workspace_manager);
-    ctrlc::set_handler(move || {
-        println!("\nReceived Ctrl+C signal, cleaning up...");
-        cleanup_on_exit(&wm_for_ctrlc);
-        std::process::exit(0);
-    })
-    .expect("Error setting Ctrl+C handler");
-
-    // Enumerate monitors and create monitor structs
-    let monitor_infos = enumerate_monitors();
-    println!("Found {} monitor(s):", monitor_infos.len());
-
-    let monitors: Vec<workspace::Monitor> = monitor_infos
-        .iter()
-        .enumerate()
-        .map(|(i, info)| {
-            println!("  Monitor {}: {:?}", i + 1, info.rect);
-            workspace::Monitor::new(info.hmonitor, info.rect)
-        })
-        .collect();
-
-    workspace_manager.lock().unwrap().set_monitors(monitors);
-
-    // Enumerate windows and assign to workspace 1
-    let normal_windows = get_normal_windows();
-    println!("Found {} normal windows:", normal_windows.len());
-
-    {
-        let focused_hwnd = unsafe { GetForegroundWindow() };
-        let wm = workspace_manager.lock().unwrap();
-        for window_info in normal_windows {
-            println!(
-                "  - {} (Class: {})",
-                window_info.title, window_info.class_name
-            );
-            let is_focused = window_info.hwnd == focused_hwnd;
-            let monitor_index = wm.get_monitor_for_window(window_info.hwnd).unwrap_or(0);
-            let mut window = workspace::Window::new(
-                window_info.hwnd.0 as isize,
-                1, // Assign to workspace 1
-                monitor_index,
-                window_info.rect,
-            );
-            window.is_focused = is_focused;
-            // Since workspace 1 is active, show in taskbar
-            let _ = show_window_in_taskbar(window_info.hwnd);
-            wm.add_window(window);
-        }
-    }
-
-    println!("Assigned all windows to workspace 1");
-
-    // Apply initial tiling
-    {
-        let wm = workspace_manager.lock().unwrap();
-        wm.tile_active_workspaces();
-        wm.apply_window_positions();
-    }
-    println!("Applied initial tiling to workspace 1");
-
-    // Start monitoring for new windows
-    start_window_monitoring(Arc::clone(&workspace_manager));
-
-    // Initialize tray icon
-    let tray = TrayManager::new().expect("Failed to create tray icon");
-
-    // Create hidden window for hotkey messages
-    let hwnd = create_message_window().expect("Failed to create message window");
-
-    // Register hotkeys
-    let mut hotkey_manager = HotkeyManager::new();
-    hotkey_manager
-        .register_hotkeys(hwnd)
-        .expect("Failed to register hotkeys");
-
-    println!("MegaTile is running. Use the tray icon to exit.");
-
-    let mut last_monitor_check = std::time::Instant::now();
-    let monitor_check_interval = Duration::from_secs(5);
-
-    // Main event loop
-    loop {
-        if tray.should_exit() {
-            println!("Exiting MegaTile...");
-            cleanup_on_exit(&workspace_manager);
-            hotkey_manager.unregister_all(hwnd);
-            break;
-        }
-
-        // Periodic monitor check
-        if last_monitor_check.elapsed() >= monitor_check_interval {
-            // only try if wm is NOT locked. This is not a critical code path and can be skipped safely.
-            if let Ok(mut wm) = workspace_manager.try_lock() {
-                if wm.check_monitor_changes() {
-                    println!("Monitor change detected by periodic check");
-                    if let Err(e) = wm.reenumerate_monitors() {
-                        eprintln!("Failed to reenumerate monitors: {}", e);
-                    }
-                }
-                last_monitor_check = std::time::Instant::now();
-            }
-        }
-
-        // Process window messages
-        let mut msg = MSG::default();
-        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
-            // Check for WM_HOTKEY BEFORE dispatching
-            if msg.message == WM_HOTKEY {
-                let action = hotkey_manager.get_action(msg.wParam.0 as i32);
-                if let Some(action) = action {
-                    handle_hotkey(action, &workspace_manager);
-                }
-            } else if msg.message == WM_DISPLAYCHANGE {
-                println!("Display configuration changed (WM_DISPLAYCHANGE)");
-                let mut wm = workspace_manager.lock().unwrap();
-                if let Err(e) = wm.reenumerate_monitors() {
-                    eprintln!("Failed to reenumerate monitors after display change: {}", e);
-                }
-            } else {
-                // Only dispatch non-hotkey messages
-                unsafe {
-                    let _ = TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-                }
-            }
-        }
-
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn cleanup_on_exit(workspace_manager: &Arc<Mutex<WorkspaceManager>>) {
+fn cleanup_on_exit(wm: &mut WorkspaceManager) {
     println!("Restoring all hidden windows...");
-    let wm = workspace_manager.lock().unwrap();
 
     // Get all managed windows from all workspaces
     let all_hwnds = wm.get_all_managed_hwnds();
@@ -292,14 +109,12 @@ fn cleanup_on_exit(workspace_manager: &Arc<Mutex<WorkspaceManager>>) {
     );
 }
 
-fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<WorkspaceManager>>) {
+fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
     match action {
         hotkeys::HotkeyAction::SwitchWorkspace(num) => {
-            let mut wm = workspace_manager.lock().unwrap();
             match wm.switch_workspace_with_windows(num) {
                 Ok(()) => {
                     println!("Switched to workspace {}", num);
-                    // Tile and apply positions for new workspace
                     wm.tile_active_workspaces();
                     wm.apply_window_positions();
                 }
@@ -307,83 +122,53 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
             }
         }
         hotkeys::HotkeyAction::MoveLeft => {
-            println!("Moving left");
-            let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Left) {
                 eprintln!("Failed to move window: {}", e);
-            } else {
-                println!("Moved window left");
             }
         }
         hotkeys::HotkeyAction::MoveRight => {
-            let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Right) {
                 eprintln!("Failed to move window: {}", e);
-            } else {
-                println!("Moved window right");
             }
         }
         hotkeys::HotkeyAction::FocusLeft => {
-            let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Left) {
                 eprintln!("Failed to move focus: {}", e);
-            } else {
-                println!("Moved focus left");
             }
         }
         hotkeys::HotkeyAction::FocusRight => {
-            let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Right) {
                 eprintln!("Failed to move focus: {}", e);
-            } else {
-                println!("Moved focus right");
             }
         }
         hotkeys::HotkeyAction::FocusUp => {
-            let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Up) {
                 eprintln!("Failed to move focus: {}", e);
-            } else {
-                println!("Moved focus up");
             }
         }
         hotkeys::HotkeyAction::FocusDown => {
-            let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Down) {
                 eprintln!("Failed to move focus: {}", e);
-            } else {
-                println!("Moved focus down");
             }
         }
         hotkeys::HotkeyAction::MoveUp => {
-            let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Up) {
                 eprintln!("Failed to move window: {}", e);
-            } else {
-                println!("Moved window up");
             }
         }
         hotkeys::HotkeyAction::MoveDown => {
-            let wm = workspace_manager.lock().unwrap();
             if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Down) {
                 eprintln!("Failed to move window: {}", e);
-            } else {
-                println!("Moved window down");
             }
         }
-        hotkeys::HotkeyAction::MoveToWorkspace(num) => {
-            let mut wm = workspace_manager.lock().unwrap();
-            match wm.move_window_to_workspace(num) {
-                Ok(()) => {
-                    println!("Moved window to workspace {}", num);
-                    // Print updated status
-                    wm.print_workspace_status();
-                }
-                Err(e) => eprintln!("Failed to move window: {}", e),
+        hotkeys::HotkeyAction::MoveToWorkspace(num) => match wm.move_window_to_workspace(num) {
+            Ok(()) => {
+                println!("Moved window to workspace {}", num);
+                wm.print_workspace_status();
             }
-        }
+            Err(e) => eprintln!("Failed to move window: {}", e),
+        },
         hotkeys::HotkeyAction::MoveToWorkspaceFollow(num) => {
-            let mut wm = workspace_manager.lock().unwrap();
             match wm.move_window_to_workspace_follow(num) {
                 Ok(()) => {
                     println!("Moved window to workspace {} and followed", num);
@@ -393,29 +178,218 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
             }
         }
         hotkeys::HotkeyAction::ToggleTiling => {
-            let wm = workspace_manager.lock().unwrap();
             if let Some(focused) = wm.get_focused_window() {
-                let hwnd = HWND(focused.hwnd as _);
-                drop(wm);
-                if let Err(e) = workspace_manager.lock().unwrap().toggle_window_tiling(hwnd) {
+                if let Err(e) = wm.toggle_window_tiling(HWND(focused.hwnd as _)) {
                     eprintln!("Failed to toggle tiling: {}", e);
                 }
             }
         }
-        hotkeys::HotkeyAction::ToggleFullscreen => {
-            let mut wm = workspace_manager.lock().unwrap();
-            match wm.toggle_fullscreen() {
-                Ok(()) => println!("Fullscreen toggled"),
-                Err(e) => eprintln!("Failed to toggle fullscreen: {}", e),
+        hotkeys::HotkeyAction::ToggleFullscreen => match wm.toggle_fullscreen() {
+            Ok(()) => println!("Fullscreen toggled"),
+            Err(e) => eprintln!("Failed to toggle fullscreen: {}", e),
+        },
+        hotkeys::HotkeyAction::CloseWindow => match wm.close_focused_window() {
+            Ok(()) => println!("Window closed successfully"),
+            Err(e) => eprintln!("Failed to close window: {}", e),
+        },
+    }
+}
+
+fn main() {
+    println!("MegaTile - Window Manager");
+
+    // Initialize event queue
+    EVENT_QUEUE.set(Mutex::new(VecDeque::new())).unwrap();
+
+    // Initialize workspace manager
+    let mut wm = WorkspaceManager::new();
+
+    // Setup Ctrl+C handler for cleanup
+    ctrlc::set_handler(move || {
+        println!("\nReceived Ctrl+C signal, pushing exit event...");
+        push_event(WindowEvent::TrayExit);
+    })
+    .expect("Error setting Ctrl+C handler");
+
+    // Enumerate monitors and create monitor structs
+    let monitor_infos = enumerate_monitors();
+    println!("Found {} monitor(s):", monitor_infos.len());
+
+    let monitors: Vec<workspace::Monitor> = monitor_infos
+        .iter()
+        .enumerate()
+        .map(|(i, info)| {
+            println!("  Monitor {}: {:?}", i + 1, info.rect);
+            workspace::Monitor::new(info.hmonitor, info.rect)
+        })
+        .collect();
+
+    wm.set_monitors(monitors);
+
+    // Enumerate windows and assign to workspace 1
+    let normal_windows = get_normal_windows();
+    println!("Found {} normal windows:", normal_windows.len());
+
+    let focused_hwnd = unsafe { GetForegroundWindow() };
+    for window_info in normal_windows {
+        println!(
+            "  - {} (Class: {})",
+            window_info.title, window_info.class_name
+        );
+        let is_focused = window_info.hwnd == focused_hwnd;
+        let monitor_index = wm.get_monitor_for_window(window_info.hwnd).unwrap_or(0);
+        let mut window = workspace::Window::new(
+            window_info.hwnd.0 as isize,
+            1, // Assign to workspace 1
+            monitor_index,
+            window_info.rect,
+        );
+        window.is_focused = is_focused;
+        // Since workspace 1 is active, show in taskbar
+        let _ = show_window_in_taskbar(window_info.hwnd);
+        wm.add_window(window);
+    }
+
+    println!("Assigned all windows to workspace 1");
+
+    // Apply initial tiling
+    wm.tile_active_workspaces();
+    wm.apply_window_positions();
+    println!("Applied initial tiling to workspace 1");
+
+    // Setup window event hooks
+    let _event_hook = unsafe {
+        SetWinEventHook(
+            EVENT_OBJECT_CREATE,
+            EVENT_OBJECT_LOCATIONCHANGE, // This also covers move/resize
+            None,
+            Some(win_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        )
+    };
+
+    // Initialize tray icon
+    let tray = TrayManager::new().expect("Failed to create tray icon");
+
+    // Create hidden window for hotkey messages
+    let hwnd = create_message_window().expect("Failed to create message window");
+
+    // Register hotkeys
+    let mut hotkey_manager = HotkeyManager::new();
+    hotkey_manager
+        .register_hotkeys(hwnd)
+        .expect("Failed to register hotkeys");
+
+    println!("MegaTile is running. Use the tray icon to exit.");
+
+    let mut last_periodic_check = Instant::now();
+    let periodic_check_interval = Duration::from_millis(100);
+
+    // Main event loop
+    loop {
+        if tray.should_exit() {
+            push_event(WindowEvent::TrayExit);
+        }
+
+        // Periodic check event
+        if last_periodic_check.elapsed() >= periodic_check_interval {
+            push_event(WindowEvent::PeriodicCheck);
+            last_periodic_check = Instant::now();
+        }
+
+        // Process window messages
+        let mut msg = MSG::default();
+        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+            if msg.message == WM_QUIT {
+                push_event(WindowEvent::TrayExit);
+            } else if msg.message == WM_HOTKEY {
+                let action = hotkey_manager.get_action(msg.wParam.0 as i32);
+                if let Some(action) = action {
+                    push_event(WindowEvent::Hotkey(action));
+                }
+            } else if msg.message == WM_DISPLAYCHANGE {
+                push_event(WindowEvent::DisplayChange);
+            } else {
+                unsafe {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
             }
         }
-        hotkeys::HotkeyAction::CloseWindow => {
-            let mut wm = workspace_manager.lock().unwrap();
-            match wm.close_focused_window() {
-                Ok(()) => println!("Window closed successfully"),
-                Err(e) => eprintln!("Failed to close window: {}", e),
+
+        // Process ONE event from the queue per iteration
+        let event = if let Some(queue) = EVENT_QUEUE.get() {
+            if let Ok(mut q) = queue.lock() {
+                q.pop_front()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(event) = event {
+            match event {
+                WindowEvent::Hotkey(action) => {
+                    handle_action(action, &mut wm);
+                }
+                WindowEvent::WindowCreated(hwnd_val) => {
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    println!("Event: Window Created {:?}", hwnd);
+                    // Filter windows here to avoid managing non-normal windows
+                    let all_windows = windows_lib::enumerate_windows();
+                    if let Some(info) = all_windows.into_iter().find(|w| w.hwnd == hwnd) {
+                        if windows_lib::is_normal_window(hwnd, &info.class_name, &info.title) {
+                            let active_workspace = wm.get_active_workspace();
+                            let monitor_index = wm.get_monitor_for_window(hwnd).unwrap_or(0);
+                            let window = workspace::Window::new(
+                                hwnd_val,
+                                active_workspace,
+                                monitor_index,
+                                info.rect,
+                            );
+                            let _ = show_window_in_taskbar(hwnd);
+                            wm.add_window(window);
+                            wm.tile_active_workspaces();
+                            wm.apply_window_positions();
+                        }
+                    }
+                }
+                WindowEvent::WindowDestroyed(hwnd_val) => {
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    println!("Event: Window Destroyed {:?}", hwnd);
+                    wm.remove_window_with_tiling(hwnd);
+                }
+                WindowEvent::WindowMoved(_hwnd_val) => {
+                    wm.update_window_positions();
+                }
+                WindowEvent::DisplayChange => {
+                    println!("Event: Display Change");
+                    if let Err(e) = wm.reenumerate_monitors() {
+                        eprintln!("Failed to reenumerate monitors: {}", e);
+                    }
+                }
+                WindowEvent::PeriodicCheck => {
+                    wm.update_window_positions();
+                    if wm.check_monitor_changes() {
+                        println!("Monitor change detected by periodic check");
+                        if let Err(e) = wm.reenumerate_monitors() {
+                            eprintln!("Failed to reenumerate monitors: {}", e);
+                        }
+                    }
+                }
+                WindowEvent::TrayExit => {
+                    println!("Exiting MegaTile...");
+                    cleanup_on_exit(&mut wm);
+                    hotkey_manager.unregister_all(hwnd);
+                    return;
+                }
             }
         }
+
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 
