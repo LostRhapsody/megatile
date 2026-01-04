@@ -88,7 +88,10 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
         }
 
         if title == "Windows Input Experience" ||
-        title == "Chrome Legacy Window" {
+        title == "Chrome Legacy Window" ||
+        title == "OLEChannelWnd" ||
+        title == "DesktopWindowXamlSource" ||
+        title == "Non Client Input Sink Window" {
             return false;
         }
 
