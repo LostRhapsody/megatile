@@ -1,9 +1,9 @@
-use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::BOOL;
 
 const MONITORINFOF_PRIMARY: u32 = 1;
 

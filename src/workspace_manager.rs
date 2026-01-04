@@ -4,7 +4,7 @@ use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsZoomed, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
+    IsZoomed, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, ShowWindow,
 };
 
 pub struct WorkspaceManager {
@@ -85,7 +85,7 @@ impl WorkspaceManager {
     }
 
     pub fn switch_workspace(&mut self, workspace_num: u8) -> bool {
-        if workspace_num < 1 || workspace_num > 9 {
+        if !(1..=9).contains(&workspace_num) {
             return false;
         }
 
@@ -197,7 +197,7 @@ impl WorkspaceManager {
     }
 
     pub fn switch_workspace_with_windows(&mut self, new_workspace: u8) -> Result<(), String> {
-        if new_workspace < 1 || new_workspace > 9 {
+        if !(1..=9).contains(&new_workspace) {
             println!(
                 "DEBUG: Invalid workspace number requested: {}",
                 new_workspace
@@ -365,7 +365,7 @@ impl WorkspaceManager {
     }
 
     pub fn move_window_to_workspace(&mut self, new_workspace: u8) -> Result<(), String> {
-        if new_workspace < 1 || new_workspace > 9 {
+        if !(1..=9).contains(&new_workspace) {
             println!(
                 "DEBUG: Invalid workspace number {} requested for window move",
                 new_workspace
@@ -914,15 +914,15 @@ impl WorkspaceManager {
             }
             (None, None) => {
                 println!("DEBUG: Could not find either window to swap (both missing)");
-                return Err("Could not find both windows to swap".to_string());
+                Err("Could not find both windows to swap".to_string())
             }
             (Some(_), None) => {
                 println!("DEBUG: Could not find window2 to swap with");
-                return Err("Could not find both windows to swap".to_string());
+                Err("Could not find both windows to swap".to_string())
             }
             (None, Some(_)) => {
                 println!("DEBUG: Could not find window1 to swap");
-                return Err("Could not find both windows to swap".to_string());
+                Err("Could not find both windows to swap".to_string())
             }
         }
     }

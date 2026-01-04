@@ -117,21 +117,21 @@ impl Monitor {
     }
 
     pub fn get_workspace(&self, workspace_num: u8) -> Option<&Workspace> {
-        if workspace_num < 1 || workspace_num > 9 {
+        if !(1..=9).contains(&workspace_num) {
             return None;
         }
         Some(&self.workspaces[(workspace_num - 1) as usize])
     }
 
     pub fn get_workspace_mut(&mut self, workspace_num: u8) -> Option<&mut Workspace> {
-        if workspace_num < 1 || workspace_num > 9 {
+        if !(1..=9).contains(&workspace_num) {
             return None;
         }
         Some(&mut self.workspaces[(workspace_num - 1) as usize])
     }
 
     pub fn set_active_workspace(&mut self, workspace_num: u8) -> bool {
-        if workspace_num < 1 || workspace_num > 9 {
+        if !(1..=9).contains(&workspace_num) {
             return false;
         }
         self.active_workspace = workspace_num;
