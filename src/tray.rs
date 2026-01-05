@@ -44,7 +44,7 @@ impl TrayManager {
         let tray_icon = create_default_icon()?;
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("MegaTile - Tiling Window Manager")
+            .with_tooltip("Megatile - Tiling Window Manager")
             .with_icon(tray_icon)
             .build()
             .unwrap();

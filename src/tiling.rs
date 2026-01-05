@@ -135,7 +135,6 @@ impl DwindleTiler {
     /// Calculates the usable work area for tiling on a monitor.
     fn get_work_area(&self, monitor: &Monitor) -> RECT {
         // For now, use full monitor rect
-        // TODO: Consider taskbar and other reserved areas
         let mut rect = monitor.rect;
         // Add minimal gap padding - use smaller gaps at edges for tighter layout
         let edge_gap = 2; // Minimal edge gap

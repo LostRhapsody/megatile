@@ -264,7 +264,7 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
             "MSCTFIME UI",
             "#32770", // Standard Windows dialog class
             "SysShadow",
-            "MegaTileStatusBar", // Filter our own status bar
+            "MegatileStatusBar", // Filter our own status bar
             "TaskListThumbnailWnd",
             "TaskSwitcherWnd",
             "TaskSwitcherOverlayWnd",
@@ -430,6 +430,11 @@ pub fn enumerate_monitors() -> Vec<MonitorInfo> {
     }
 
     monitors
+}
+
+/// Checks if a window is currently minimized.
+pub fn is_window_minimized(hwnd: HWND) -> bool {
+    unsafe { IsIconic(hwnd).as_bool() }
 }
 
 /// Closes a window gracefully by sending WM_CLOSE.

@@ -45,6 +45,12 @@ pub enum HotkeyAction {
     ToggleTiling,
     ToggleFullscreen,
     ToggleStatusBar,
+
+    // Monitor movement
+    MoveToMonitorLeft,
+    MoveToMonitorRight,
+    MoveToMonitorUp,
+    MoveToMonitorDown,
 }
 
 impl HotkeyManager {
@@ -60,6 +66,7 @@ impl HotkeyManager {
     /// # Hotkey Bindings
     /// - `Alt + Arrows`: Move focus
     /// - `Alt + Shift + Arrows`: Move window
+    /// - `Alt + Ctrl + Arrows`: Move window to adjacent monitor
     /// - `Alt + 1-9`: Switch workspace
     /// - `Alt + Shift + 1-9`: Move window to workspace and follow
     /// - `Alt + +/-`: Resize horizontally
@@ -124,6 +131,31 @@ impl HotkeyManager {
                 VIRTUAL_KEY(0x42),
                 45,
                 HotkeyAction::ToggleStatusBar,
+            ),
+            // Monitor movement (Alt + Ctrl + Arrows)
+            (
+                MOD_ALT | MOD_CONTROL,
+                VK_LEFT,
+                50,
+                HotkeyAction::MoveToMonitorLeft,
+            ),
+            (
+                MOD_ALT | MOD_CONTROL,
+                VK_RIGHT,
+                51,
+                HotkeyAction::MoveToMonitorRight,
+            ),
+            (
+                MOD_ALT | MOD_CONTROL,
+                VK_UP,
+                52,
+                HotkeyAction::MoveToMonitorUp,
+            ),
+            (
+                MOD_ALT | MOD_CONTROL,
+                VK_DOWN,
+                53,
+                HotkeyAction::MoveToMonitorDown,
             ),
         ];
 

@@ -1,34 +1,18 @@
 [package]
 name = "megatile"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
 windows = { version = "0.62", features = [
-    "Win32_Graphics_Direct2D",
-    "Win32_Graphics_Direct2D_Common",
-    "Win32_Graphics_Direct3D",
-    "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_DirectComposition",
-    "Win32_Graphics_Dxgi",
-    "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_GdiPlus",
     "Win32_Graphics_Dwm",
-    "Win32_Networking_WinSock",
-    "Win32_Security",
-    "Win32_System_Diagnostics_Debug",
-    "Win32_System_IO",
     "Win32_System_LibraryLoader",
-    "Win32_System_SystemInformation",
-    "Win32_System_Threading",
-    "Win32_Storage_FileSystem",
     "Win32_UI_Accessibility",
-    "Win32_UI_HiDpi",
-    "Win32_UI_Input_Ime",
     "Win32_UI_WindowsAndMessaging",
-    "Wdk_System_SystemServices",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_SystemInformation",
 ]}
 tray-icon = "0.14"
-winit = "0.29"
 ctrlc = "3.4"

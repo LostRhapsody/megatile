@@ -1,6 +1,6 @@
-//! # MegaTile - A Tiling Window Manager for Windows
+//! # Megatile - A Tiling Window Manager for Windows
 //!
-//! MegaTile is a lightweight tiling window manager designed for Windows 10/11.
+//! Megatile is a lightweight tiling window manager designed for Windows 10/11.
 //! It provides automatic window tiling with a dwindle layout algorithm,
 //! multi-monitor support, and workspace management.
 //!
@@ -46,20 +46,22 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::PCWSTR;
 
 use hotkeys::HotkeyManager;
-use statusbar::{STATUSBAR_HEIGHT, STATUSBAR_TOP_GAP, STATUSBAR_WIDTH, StatusBar};
+use statusbar::{
+    STATUSBAR_HEIGHT, STATUSBAR_TOP_GAP, STATUSBAR_WIDTH, StatusBar, init_gdiplus, shutdown_gdiplus,
+};
 use tray::TrayManager;
 use windows_lib::{
     enumerate_monitors, get_normal_windows, reset_window_decorations, show_window_in_taskbar,
 };
 use workspace_manager::WorkspaceManager;
 
-/// Window class name for the hidden message window ("MegaTileMessageWindow" as UTF-16).
+/// Window class name for the hidden message window ("MegatileMessageWindow" as UTF-16).
 static CLASS_NAME: [u16; 22] = [
     77, 101, 103, 97, 84, 105, 108, 101, 77, 101, 115, 115, 97, 103, 101, 87, 105, 110, 100, 111,
     119, 0,
 ];
 
-/// Window title ("MegaTile" as UTF-16).
+/// Window title ("Megatile" as UTF-16).
 static TITLE: [u16; 9] = [77, 101, 103, 97, 84, 105, 108, 101, 0];
 
 /// Internal events processed by the main event loop.
@@ -68,6 +70,8 @@ enum WindowEvent {
     Hotkey(hotkeys::HotkeyAction),
     WindowCreated(isize),
     WindowDestroyed(isize),
+    WindowMinimized(isize),
+    WindowRestored(isize),
     WindowMoved(isize),
     FocusChanged(isize),
     DisplayChange,
@@ -114,6 +118,12 @@ unsafe extern "system" fn win_event_proc(
         EVENT_OBJECT_DESTROY => {
             push_event(WindowEvent::WindowDestroyed(hwnd.0 as isize));
         }
+        EVENT_SYSTEM_MINIMIZESTART => {
+            push_event(WindowEvent::WindowMinimized(hwnd.0 as isize));
+        }
+        EVENT_SYSTEM_MINIMIZEEND => {
+            push_event(WindowEvent::WindowRestored(hwnd.0 as isize));
+        }
         EVENT_OBJECT_LOCATIONCHANGE => {
             push_event(WindowEvent::WindowMoved(hwnd.0 as isize));
         }
@@ -123,13 +133,22 @@ unsafe extern "system" fn win_event_proc(
 
 /// Restores all managed windows to their visible state before exit.
 ///
-/// This ensures windows are not left hidden in the taskbar when MegaTile exits.
+/// This ensures windows are not left hidden in the taskbar when Megatile exits.
 fn cleanup_on_exit(wm: &mut WorkspaceManager) {
     println!("Restoring all hidden windows...");
 
     // Get all managed windows from all workspaces
     let all_hwnds = wm.get_all_managed_hwnds();
     println!("Found {} managed windows to restore", all_hwnds.len());
+
+    let normal_windows = get_normal_windows();
+    println!("Found {} normal windows to restore", normal_windows.len());
+    for window_info in normal_windows {
+        println!(
+            "  - {} (Class: {})",
+            window_info.title, window_info.class_name
+        );
+    }
 
     let mut restored_count = 0;
     let mut failed_count = 0;
@@ -273,11 +292,31 @@ fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
         hotkeys::HotkeyAction::ToggleStatusBar => {
             wm.invert_statusbar_visibility();
         }
+        hotkeys::HotkeyAction::MoveToMonitorLeft => {
+            if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Left) {
+                eprintln!("Failed to move window to monitor: {}", e);
+            }
+        }
+        hotkeys::HotkeyAction::MoveToMonitorRight => {
+            if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Right) {
+                eprintln!("Failed to move window to monitor: {}", e);
+            }
+        }
+        hotkeys::HotkeyAction::MoveToMonitorUp => {
+            if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Up) {
+                eprintln!("Failed to move window to monitor: {}", e);
+            }
+        }
+        hotkeys::HotkeyAction::MoveToMonitorDown => {
+            if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Down) {
+                eprintln!("Failed to move window to monitor: {}", e);
+            }
+        }
     }
 }
 
 fn main() {
-    println!("MegaTile - Window Manager");
+    println!("Megatile - Window Manager");
 
     // Initialize event queue
     EVENT_QUEUE.set(Mutex::new(VecDeque::new())).unwrap();
@@ -351,6 +390,19 @@ fn main() {
         )
     };
 
+    // Setup minimize event hook
+    let _minimize_hook = unsafe {
+        SetWinEventHook(
+            EVENT_SYSTEM_MINIMIZESTART,
+            EVENT_SYSTEM_MINIMIZEEND,
+            None,
+            Some(win_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        )
+    };
+
     // Initialize tray icon
     let tray = TrayManager::new().expect("Failed to create tray icon");
 
@@ -362,6 +414,9 @@ fn main() {
     hotkey_manager
         .register_hotkeys(hwnd)
         .expect("Failed to register hotkeys");
+
+    // Initialize GDI+ for anti-aliased rendering
+    init_gdiplus().expect("Failed to initialize GDI+");
 
     // Initialize status bar
     let statusbar = StatusBar::new(hwnd).expect("Failed to create status bar");
@@ -376,13 +431,14 @@ fn main() {
         let y = rect.top + STATUSBAR_TOP_GAP;
 
         statusbar.set_position(x, y, statusbar_width, statusbar_height);
+        statusbar.show(); // Show the status bar on startup
     }
 
     wm.set_statusbar(statusbar);
     wm.update_statusbar();
     wm.update_decorations();
 
-    println!("MegaTile is running. Use the tray icon to exit.");
+    println!("Megatile is running. Use the tray icon to exit.");
 
     let mut last_periodic_check = Instant::now();
     let periodic_check_interval = Duration::from_millis(100);
@@ -475,9 +531,22 @@ fn main() {
                         println!("Event: Window Destroyed {:?}", hwnd);
                         wm.remove_window_with_tiling(hwnd);
                     }
-                    WindowEvent::WindowMoved(_hwnd_val) => {
-                        wm.update_window_positions();
-                        wm.update_statusbar();
+                    WindowEvent::WindowMinimized(hwnd_val) => {
+                        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                        println!("Event: Window Minimized {:?}", hwnd);
+                        wm.handle_window_minimized(hwnd);
+                    }
+                    WindowEvent::WindowRestored(hwnd_val) => {
+                        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                        println!("Event: Window Restored {:?}", hwnd);
+                        wm.handle_window_restored(hwnd);
+                    }
+                    WindowEvent::WindowMoved(hwnd_val) => {
+                        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                        // Only process move events if not from our own positioning
+                        if !wm.is_positioning_window(hwnd) {
+                            wm.update_window_positions();
+                        }
                     }
                     WindowEvent::FocusChanged(_hwnd_val) => {
                         wm.update_decorations();
@@ -489,8 +558,10 @@ fn main() {
                         }
                     }
                     WindowEvent::PeriodicCheck => {
-                        wm.update_window_positions();
+                        // Don't call update_window_positions here - it causes feedback loops
+                        // WindowMoved events will handle position updates
                         wm.update_decorations();
+                        wm.cleanup_minimized_windows();
                         if wm.check_monitor_changes() {
                             println!("Monitor change detected by periodic check");
                             if let Err(e) = wm.reenumerate_monitors() {
@@ -499,9 +570,10 @@ fn main() {
                         }
                     }
                     WindowEvent::TrayExit => {
-                        println!("Exiting MegaTile...");
+                        println!("Exiting Megatile...");
                         cleanup_on_exit(&mut wm);
                         hotkey_manager.unregister_all(hwnd);
+                        shutdown_gdiplus();
                         return;
                     }
                 }

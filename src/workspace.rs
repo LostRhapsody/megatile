@@ -1,13 +1,13 @@
 //! Core data structures for window and workspace management.
 //!
-//! This module defines the fundamental types used throughout MegaTile:
+//! This module defines the fundamental types used throughout Megatile:
 //! - [`Window`] - Represents a managed window
 //! - [`Workspace`] - A collection of windows with layout state
 //! - [`Monitor`] - A physical display with multiple workspaces
 
 use windows::Win32::Foundation::{HWND, RECT};
 
-/// Represents a window managed by MegaTile.
+/// Represents a window managed by Megatile.
 ///
 /// Each window tracks its position, workspace assignment, tiling state,
 /// and focus status.
