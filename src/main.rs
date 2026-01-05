@@ -1,6 +1,6 @@
-//! # MegaTile - A Tiling Window Manager for Windows
+//! # Megatile - A Tiling Window Manager for Windows
 //!
-//! MegaTile is a lightweight tiling window manager designed for Windows 10/11.
+//! Megatile is a lightweight tiling window manager designed for Windows 10/11.
 //! It provides automatic window tiling with a dwindle layout algorithm,
 //! multi-monitor support, and workspace management.
 //!
@@ -55,13 +55,13 @@ use windows_lib::{
 };
 use workspace_manager::WorkspaceManager;
 
-/// Window class name for the hidden message window ("MegaTileMessageWindow" as UTF-16).
+/// Window class name for the hidden message window ("MegatileMessageWindow" as UTF-16).
 static CLASS_NAME: [u16; 22] = [
     77, 101, 103, 97, 84, 105, 108, 101, 77, 101, 115, 115, 97, 103, 101, 87, 105, 110, 100, 111,
     119, 0,
 ];
 
-/// Window title ("MegaTile" as UTF-16).
+/// Window title ("Megatile" as UTF-16).
 static TITLE: [u16; 9] = [77, 101, 103, 97, 84, 105, 108, 101, 0];
 
 /// Internal events processed by the main event loop.
@@ -133,7 +133,7 @@ unsafe extern "system" fn win_event_proc(
 
 /// Restores all managed windows to their visible state before exit.
 ///
-/// This ensures windows are not left hidden in the taskbar when MegaTile exits.
+/// This ensures windows are not left hidden in the taskbar when Megatile exits.
 fn cleanup_on_exit(wm: &mut WorkspaceManager) {
     println!("Restoring all hidden windows...");
 
@@ -316,7 +316,7 @@ fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
 }
 
 fn main() {
-    println!("MegaTile - Window Manager");
+    println!("Megatile - Window Manager");
 
     // Initialize event queue
     EVENT_QUEUE.set(Mutex::new(VecDeque::new())).unwrap();
@@ -438,7 +438,7 @@ fn main() {
     wm.update_statusbar();
     wm.update_decorations();
 
-    println!("MegaTile is running. Use the tray icon to exit.");
+    println!("Megatile is running. Use the tray icon to exit.");
 
     let mut last_periodic_check = Instant::now();
     let periodic_check_interval = Duration::from_millis(100);
@@ -570,7 +570,7 @@ fn main() {
                         }
                     }
                     WindowEvent::TrayExit => {
-                        println!("Exiting MegaTile...");
+                        println!("Exiting Megatile...");
                         cleanup_on_exit(&mut wm);
                         hotkey_manager.unregister_all(hwnd);
                         shutdown_gdiplus();

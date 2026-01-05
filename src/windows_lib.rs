@@ -264,7 +264,7 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
             "MSCTFIME UI",
             "#32770", // Standard Windows dialog class
             "SysShadow",
-            "MegaTileStatusBar", // Filter our own status bar
+            "MegatileStatusBar", // Filter our own status bar
             "TaskListThumbnailWnd",
             "TaskSwitcherWnd",
             "TaskSwitcherOverlayWnd",

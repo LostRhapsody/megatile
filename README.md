@@ -1,16 +1,16 @@
-# MegaTile
+# Megatile
 
 An opinionated tiling manager for windows.
 
 ## Overview
 
-MegaTile is a minimalist tiling manager that does the bare minimum to be effective. It has a standardized set of keybinds, a very simple status bar, and a single tiling algorithm.
+Megatile is a minimalist tiling manager that does the bare minimum to be effective. It has a standardized set of keybinds, a very simple status bar, and a single tiling algorithm.
 
-MegaTile will **not** suite everyone. It was designed to suite my needs exactly. There is no config file, to keep Megatile as simple as possible.
+Megatile will **not** suite everyone. It was designed to suite my needs exactly. There is no config file, to keep Megatile as simple as possible.
 
-## MegaTile Features and Goals
+## Megatile Features and Goals
 
-MegaTile aims to be simple, fast, and effective.
+Megatile aims to be simple, fast, and effective.
 
 - **Fast**: Rust with bindings for the Window's API via `windows-rs`. Minimal dependencies and responsibilities.
 - **Simple**: We manage windows, workspaces, and keybinds to control them, nothing else.
@@ -74,7 +74,7 @@ Follow these steps:
 - `cargo build --release`
 - `./target/release/megatile.exe`
 
-MegaTile will now be running in the background, you can turn it off by finding the orange square in the system tray, right clicking it, and selecting exit.
+Megatile will now be running in the background, you can turn it off by finding the orange square in the system tray, right clicking it, and selecting exit.
 
 ## Contributing
 
@@ -91,7 +91,7 @@ Before working on a larger change, consider opening a discussion to talk about t
 This project is **source‑available, non‑commercial**.
 
 - The source is freely accessible and may be used and modified for non‑commercial purposes.
-- Commercial use (including using MegaTile as part of a paid product or service) requires a separate commercial license from the author.
+- Commercial use (including using Megatile as part of a paid product or service) requires a separate commercial license from the author.
 
 If you are interested in commercial use, please contact the author to discuss licensing terms.
 

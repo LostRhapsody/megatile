@@ -168,7 +168,7 @@ impl WorkspaceManager {
         self.active_workspace_global
     }
 
-    /// Returns all window handles managed by MegaTile across all workspaces.
+    /// Returns all window handles managed by Megatile across all workspaces.
     pub fn get_all_managed_hwnds(&self) -> Vec<isize> {
         let mut hwnds = Vec::new();
         for monitor in self.monitors.iter() {
@@ -810,7 +810,10 @@ impl WorkspaceManager {
     /// If no monitor exists in the specified direction, this function returns Ok(())
     /// without moving the window (no-op behavior).
     pub fn move_window_to_monitor(&mut self, direction: FocusDirection) -> Result<(), String> {
-        println!("DEBUG: Moving window to monitor in direction {:?}", direction);
+        println!(
+            "DEBUG: Moving window to monitor in direction {:?}",
+            direction
+        );
 
         // Get currently focused window
         let focused = self.get_focused_window();
@@ -831,7 +834,8 @@ impl WorkspaceManager {
         );
 
         // Find target monitor in the specified direction
-        let target_monitor_idx = match self.find_monitor_in_direction(source_monitor_idx, direction) {
+        let target_monitor_idx = match self.find_monitor_in_direction(source_monitor_idx, direction)
+        {
             Some(idx) => idx,
             None => {
                 println!(
@@ -858,16 +862,15 @@ impl WorkspaceManager {
         // Remove window from current monitor/workspace
         let mut window_to_move = None;
 
-        if let Some(monitor) = self.monitors.get_mut(source_monitor_idx) {
-            if let Some(workspace) = monitor.get_workspace_mut(current_workspace) {
-                if let Some(window) = workspace.remove_window(hwnd) {
-                    window_to_move = Some(window);
-                    println!(
-                        "DEBUG: Removed window from monitor {} workspace {}",
-                        source_monitor_idx, current_workspace
-                    );
-                }
-            }
+        if let Some(monitor) = self.monitors.get_mut(source_monitor_idx)
+            && let Some(workspace) = monitor.get_workspace_mut(current_workspace)
+            && let Some(window) = workspace.remove_window(hwnd)
+        {
+            window_to_move = Some(window);
+            println!(
+                "DEBUG: Removed window from monitor {} workspace {}",
+                source_monitor_idx, current_workspace
+            );
         }
 
         if let Some(mut window) = window_to_move {
@@ -877,7 +880,8 @@ impl WorkspaceManager {
 
             // Add window to target monitor's active workspace (same workspace number)
             if let Some(target_monitor) = self.monitors.get_mut(target_monitor_idx) {
-                if let Some(target_workspace) = target_monitor.get_workspace_mut(current_workspace) {
+                if let Some(target_workspace) = target_monitor.get_workspace_mut(current_workspace)
+                {
                     let hwnd_val = window.hwnd;
                     target_workspace.add_window(window.clone());
                     target_workspace.focused_window_hwnd = Some(hwnd_val); // Ensure moved window is focused
@@ -892,7 +896,10 @@ impl WorkspaceManager {
                     ));
                 }
             } else {
-                return Err(format!("Failed to access target monitor {}", target_monitor_idx));
+                return Err(format!(
+                    "Failed to access target monitor {}",
+                    target_monitor_idx
+                ));
             }
 
             // Re-tile both source and target monitors' active workspaces
@@ -1046,7 +1053,7 @@ impl WorkspaceManager {
         // We'll clean this up in the next update cycle
     }
 
-    /// Returns the currently focused window if it's managed by MegaTile.
+    /// Returns the currently focused window if it's managed by Megatile.
     pub fn get_focused_window(&self) -> Option<Window> {
         use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 

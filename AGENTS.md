@@ -1,6 +1,6 @@
-# AGENTS.md - MegaTile Development Guide
+# AGENTS.md - Megatile Development Guide
 
-This document provides essential information for agentic coding assistants working on the MegaTile project. Follow these guidelines to maintain consistency and quality.
+This document provides essential information for agentic coding assistants working on the Megatile project. Follow these guidelines to maintain consistency and quality.
 
 ## Build, Lint, and Test Commands
 

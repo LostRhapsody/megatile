@@ -16,15 +16,13 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::Graphics::GdiPlus::{
     FillMode, GdipAddPathArc, GdipAddPathLine, GdipClosePathFigure, GdipCreateFont,
-    GdipCreateFontFamilyFromName, GdipCreateFromHDC, GdipCreatePath, GdipCreatePen1,
-    GdipCreateSolidFill, GdipCreateStringFormat, GdipDeleteBrush, GdipDeleteFont,
-    GdipDeleteFontFamily, GdipDeleteGraphics, GdipDeletePath, GdipDeletePen,
-    GdipDeleteStringFormat, GdipDrawPath, GdipDrawString, GdipFillEllipse, GdipFillPath,
-    GdipGraphicsClear, GdipSetSmoothingMode, GdipSetStringFormatAlign,
+    GdipCreateFontFamilyFromName, GdipCreateFromHDC, GdipCreatePath, GdipCreateSolidFill,
+    GdipCreateStringFormat, GdipDeleteBrush, GdipDeleteFont, GdipDeleteFontFamily,
+    GdipDeleteGraphics, GdipDeletePath, GdipDeleteStringFormat, GdipDrawString, GdipFillEllipse,
+    GdipFillPath, GdipGraphicsClear, GdipSetSmoothingMode, GdipSetStringFormatAlign,
     GdipSetStringFormatLineAlign, GdipSetTextRenderingHint, GdiplusShutdown, GdiplusStartup,
-    GdiplusStartupInput, GpBrush, GpFontFamily, GpGraphics, GpPath, GpPen, GpSolidFill,
-    GpStringFormat, SmoothingModeHighQuality, StringAlignmentCenter,
-    TextRenderingHintClearTypeGridFit, Unit,
+    GdiplusStartupInput, GpBrush, GpFontFamily, GpGraphics, GpPath, GpSolidFill, GpStringFormat,
+    SmoothingModeHighQuality, StringAlignmentCenter, TextRenderingHintClearTypeGridFit, Unit,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetLocalTime;
@@ -63,7 +61,7 @@ const DEFAULT_ACCENT_COLOR: u32 = 0x007A7A7A;
 const ALWAYS_SHOW_WORKSPACES: u8 = 5; // Workspaces 1-5 always shown
 
 static STATUSBAR_CLASS: OnceLock<Result<(), String>> = OnceLock::new();
-const STATUSBAR_CLASS_NAME: PCWSTR = w!("MegaTileStatusBar");
+const STATUSBAR_CLASS_NAME: PCWSTR = w!("MegatileStatusBar");
 
 /// GDI+ token for initialization/shutdown.
 static mut GDIPLUS_TOKEN: usize = 0;
@@ -792,16 +790,6 @@ fn semi_transparent_dot_color(accent_color: u32) -> u32 {
         blend_channel(r, target, 0.25),
         blend_channel(g, target, 0.25),
         blend_channel(b, target, 0.25),
-    )
-}
-
-/// Darkens a color by a factor (0.0 = black, 1.0 = unchanged).
-fn darken_color(color: u32, factor: f32) -> u32 {
-    let (r, g, b) = split_color(color);
-    compose_color(
-        (r as f32 * factor) as u8,
-        (g as f32 * factor) as u8,
-        (b as f32 * factor) as u8,
     )
 }
 
