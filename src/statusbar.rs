@@ -2,13 +2,17 @@
 //!
 //! Displays a floating bar showing workspace indicators with numbers,
 //! and the current date/time. Uses the system accent color with a dimmed backdrop.
-//! Renders using GDI+ for anti-aliased edges and smooth rendering.
+//! Renders using GDI+ with layered windows for smooth anti-aliased edges.
 
 use std::sync::OnceLock;
 
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, SYSTEMTIME, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, SYSTEMTIME, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateRoundRectRgn, EndPaint, InvalidateRect, PAINTSTRUCT, SetWindowRgn,
+    AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
+    CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, ReleaseDC,
+    SelectObject,
 };
 use windows::Win32::Graphics::GdiPlus::{
     FillMode, GdipAddPathArc, GdipAddPathLine, GdipClosePathFigure, GdipCreateFont,
@@ -16,8 +20,8 @@ use windows::Win32::Graphics::GdiPlus::{
     GdipCreateSolidFill, GdipCreateStringFormat, GdipDeleteBrush, GdipDeleteFont,
     GdipDeleteFontFamily, GdipDeleteGraphics, GdipDeletePath, GdipDeletePen,
     GdipDeleteStringFormat, GdipDrawPath, GdipDrawString, GdipFillEllipse, GdipFillPath,
-    GdipSetSmoothingMode, GdipSetStringFormatAlign, GdipSetStringFormatLineAlign,
-    GdipSetTextRenderingHint, GdipStartPathFigure, GdiplusShutdown, GdiplusStartup,
+    GdipGraphicsClear, GdipSetSmoothingMode, GdipSetStringFormatAlign,
+    GdipSetStringFormatLineAlign, GdipSetTextRenderingHint, GdiplusShutdown, GdiplusStartup,
     GdiplusStartupInput, GpBrush, GpFontFamily, GpGraphics, GpPath, GpPen, GpSolidFill,
     GpStringFormat, SmoothingModeHighQuality, StringAlignmentCenter,
     TextRenderingHintClearTypeGridFit, Unit,
@@ -26,10 +30,10 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
-    GetClientRect, GetWindowLongPtrW, HMENU, HWND_TOPMOST, IDC_ARROW, LoadCursorW, RegisterClassW,
-    SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WNDCLASSW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    GetWindowLongPtrW, GetWindowRect, HMENU, HWND_TOPMOST, IDC_ARROW, LoadCursorW, RegisterClassW,
+    SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, ULW_ALPHA, UpdateLayeredWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_NCDESTROY,
+    WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
@@ -74,6 +78,10 @@ struct StatusBarState {
     time_string: String,
     /// Bitmask for workspaces 6-9 that have windows (bit 0 = ws6, bit 1 = ws7, etc)
     occupied_workspaces_6_9: u8,
+    /// Current width of the status bar
+    width: i32,
+    /// Current height of the status bar
+    height: i32,
 }
 
 /// A floating status bar showing workspace indicators.
@@ -128,15 +136,20 @@ impl StatusBar {
             accent_color,
             time_string: String::new(),
             occupied_workspaces_6_9: 0,
+            width: STATUSBAR_WIDTH,
+            height: STATUSBAR_HEIGHT,
         });
         update_time_string(&mut state);
 
+        // Create layered window (WS_EX_LAYERED) for per-pixel alpha
         let hwnd = unsafe {
             CreateWindowExW(
-                WINDOW_EX_STYLE(WS_EX_TOPMOST.0 | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0),
+                WINDOW_EX_STYLE(
+                    WS_EX_TOPMOST.0 | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0 | WS_EX_LAYERED.0,
+                ),
                 STATUSBAR_CLASS_NAME,
                 w!(""),
-                WINDOW_STYLE(WS_POPUP.0 | WS_VISIBLE.0),
+                WINDOW_STYLE(WS_POPUP.0),
                 0,
                 0,
                 STATUSBAR_WIDTH,
@@ -151,7 +164,8 @@ impl StatusBar {
 
         let mut statusbar = StatusBar { hwnd, state };
         statusbar.sync_state_pointer();
-        statusbar.update_region(STATUSBAR_WIDTH, STATUSBAR_HEIGHT);
+        // Initial render
+        statusbar.render();
         Ok(statusbar)
     }
 
@@ -167,7 +181,6 @@ impl StatusBar {
                 height,
                 SWP_NOACTIVATE,
             );
-            self.update_region(width, height);
         }
     }
 
@@ -190,15 +203,23 @@ impl StatusBar {
             self.state.accent_color = color;
         }
         update_time_string(&mut self.state);
-        unsafe {
-            let _ = InvalidateRect(Some(self.hwnd), None, BOOL(0).into());
-        }
+        self.render();
     }
 
     /// Shows the status bar.
     pub fn show(&self) {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOW);
+            // Re-render after showing to ensure proper display
+            let _ = SetWindowPos(
+                self.hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+            );
         }
     }
 
@@ -216,10 +237,10 @@ impl StatusBar {
         }
     }
 
-    fn update_region(&self, width: i32, height: i32) {
+    /// Renders the status bar using layered window with per-pixel alpha.
+    fn render(&self) {
         unsafe {
-            let region = CreateRoundRectRgn(0, 0, width, height, CORNER_RADIUS, CORNER_RADIUS);
-            let _ = SetWindowRgn(self.hwnd, Some(region), BOOL(1).into());
+            render_layered_window(self.hwnd, &self.state);
         }
     }
 }
@@ -260,16 +281,8 @@ extern "system" fn statusbar_wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     unsafe {
-        match msg {
-            WM_PAINT => {
-                paint_statusbar(hwnd);
-                return LRESULT(0);
-            }
-            WM_ERASEBKGND => return LRESULT(1),
-            WM_NCDESTROY => {
-                let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-            }
-            _ => {}
+        if msg == WM_NCDESTROY {
+            let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         }
 
         DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -287,42 +300,128 @@ fn update_time_string(state: &mut StatusBarState) {
     );
 }
 
-unsafe fn paint_statusbar(hwnd: HWND) {
+/// Renders the status bar to a 32-bit ARGB bitmap and updates the layered window.
+unsafe fn render_layered_window(hwnd: HWND, state: &StatusBarState) {
     unsafe {
-        let state_ptr = get_state_ptr(hwnd);
-        if state_ptr.is_null() {
+        let width = state.width;
+        let height = state.height;
+
+        // Get screen DC
+        let screen_dc = GetDC(None);
+        if screen_dc.0.is_null() {
             return;
         }
 
-        let state = &*state_ptr;
-
-        let mut ps = PAINTSTRUCT::default();
-        let hdc = BeginPaint(hwnd, &mut ps);
-        if hdc.0.is_null() {
+        // Create compatible DC for our bitmap
+        let mem_dc = CreateCompatibleDC(Some(screen_dc));
+        if mem_dc.0.is_null() {
+            let _ = ReleaseDC(None, screen_dc);
             return;
         }
 
-        let mut rect = RECT::default();
-        let _ = GetClientRect(hwnd, &mut rect);
+        // Create 32-bit ARGB DIB section
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height, // Top-down DIB (negative height)
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [Default::default()],
+        };
 
-        // Create GDI+ Graphics object from HDC
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let bitmap = CreateDIBSection(Some(mem_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0);
+
+        if bitmap.is_err() || bits.is_null() {
+            let _ = DeleteDC(mem_dc);
+            let _ = ReleaseDC(None, screen_dc);
+            return;
+        }
+
+        let bitmap = bitmap.unwrap();
+        let old_bitmap = SelectObject(mem_dc, bitmap.into());
+
+        // Create GDI+ Graphics from the memory DC
         let mut graphics: *mut GpGraphics = std::ptr::null_mut();
-        if GdipCreateFromHDC(hdc, &mut graphics).0 != 0 || graphics.is_null() {
-            let _ = EndPaint(hwnd, &ps);
+        if GdipCreateFromHDC(mem_dc, &mut graphics).0 != 0 || graphics.is_null() {
+            SelectObject(mem_dc, old_bitmap);
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(mem_dc);
+            let _ = ReleaseDC(None, screen_dc);
             return;
         }
+
+        // Clear to fully transparent
+        let _ = GdipGraphicsClear(graphics, 0x00000000);
 
         // Enable anti-aliasing
         let _ = GdipSetSmoothingMode(graphics, SmoothingModeHighQuality);
         let _ = GdipSetTextRenderingHint(graphics, TextRenderingHintClearTypeGridFit);
 
+        // Create rect for drawing
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        };
+
+        // Draw all elements
         draw_background_gdiplus(graphics, &rect, state.accent_color);
         draw_workspace_dots_gdiplus(graphics, &rect, state);
         draw_time_gdiplus(graphics, &rect, state);
 
-        // Cleanup
+        // Cleanup GDI+
         GdipDeleteGraphics(graphics);
-        let _ = EndPaint(hwnd, &ps);
+
+        // Get window position
+        let mut window_rect = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut window_rect);
+
+        // Setup blend function for per-pixel alpha
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+
+        let pt_src = POINT { x: 0, y: 0 };
+        let pt_dst = POINT {
+            x: window_rect.left,
+            y: window_rect.top,
+        };
+        let size = SIZE {
+            cx: width,
+            cy: height,
+        };
+
+        // Update layered window with per-pixel alpha
+        let _ = UpdateLayeredWindow(
+            hwnd,
+            Some(screen_dc),
+            Some(&pt_dst),
+            Some(&size),
+            Some(mem_dc),
+            Some(&pt_src),
+            COLORREF(0), // No color key used
+            Some(&blend),
+            ULW_ALPHA,
+        );
+
+        // Cleanup GDI resources
+        SelectObject(mem_dc, old_bitmap);
+        let _ = DeleteObject(bitmap.into());
+        let _ = DeleteDC(mem_dc);
+        let _ = ReleaseDC(None, screen_dc);
     }
 }
 
@@ -331,7 +430,7 @@ unsafe fn draw_background_gdiplus(graphics: *mut GpGraphics, rect: &RECT, accent
         let bg_color = dimmed_desaturated_background(accent_color);
         let (r, g, b) = split_color(bg_color);
 
-        // Create fill brush for background
+        // Create fill brush for background with full opacity
         let mut brush: *mut GpSolidFill = std::ptr::null_mut();
         let argb_bg = make_argb(255, r, g, b);
         if GdipCreateSolidFill(argb_bg, &mut brush).0 != 0 {
@@ -388,9 +487,6 @@ unsafe fn create_rounded_rect_path(
 
         let diameter = radius * 2.0;
 
-        // Start the path figure
-        let _ = GdipStartPathFigure(path);
-
         // Top-left arc
         let _ = GdipAddPathArc(path, x, y, diameter, diameter, 180.0, 90.0);
 
@@ -435,9 +531,6 @@ unsafe fn create_rounded_rect_path(
             90.0,
             90.0,
         );
-
-        // Left edge (back to start)
-        let _ = GdipAddPathLine(path, x, y + height - radius, x, y + radius);
 
         // Close the figure
         let _ = GdipClosePathFigure(path);
@@ -747,6 +840,7 @@ fn make_argb(a: u8, r: u8, g: u8, b: u8) -> u32 {
     ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
 }
 
+#[allow(dead_code)]
 unsafe fn get_state_ptr(hwnd: HWND) -> *mut StatusBarState {
     unsafe {
         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
