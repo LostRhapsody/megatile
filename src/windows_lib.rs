@@ -98,28 +98,54 @@ pub fn is_normal_window_hwnd(hwnd: HWND) -> bool {
 
 /// Determines if a window is a "normal" window that should be managed.
 ///
-/// Filters out system windows, tool windows, invisible windows, and other
-/// windows that shouldn't be tiled (taskbar, shell windows, etc.).
+/// Filters out system windows, tool windows, invisible windows, popups,
+/// dialogs, and other windows that shouldn't be tiled (taskbar, shell windows, etc.).
 pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
     println!(
         "Checking if window, title {}, class name {}, hwnd {:?}, is 'normal'.",
         title, class_name, hwnd
     );
     unsafe {
+        // Basic visibility check
         if !IsWindowVisible(hwnd).as_bool() {
             return false;
         }
 
+        // Filter minimized windows
         if IsIconic(hwnd).as_bool() {
             return false;
         }
 
-        if title == "Windows Input Experience"
-            || title == "Chrome Legacy Window"
-            || title == "OLEChannelWnd"
-            || title == "DesktopWindowXamlSource"
-            || title == "Non Client Input Sink Window"
-        {
+        // Verify the window handle is still valid
+        if !IsWindow(Some(hwnd)).as_bool() {
+            println!("Filtered: invalid window handle");
+            return false;
+        }
+
+        // Filter specific problematic window titles
+        let filtered_titles = [
+            "Windows Input Experience",
+            "Chrome Legacy Window",
+            "OLEChannelWnd",
+            "DesktopWindowXamlSource",
+            "Non Client Input Sink Window",
+            "Program Manager",
+            "MSCTFIME UI",
+            "Default IME",
+            "GDI+ Window",
+            "MediaContextNotificationWindow",
+            "CicMarshalWnd",
+        ];
+        for filtered_title in &filtered_titles {
+            if title == *filtered_title {
+                println!("Filtered: problematic title {}", title);
+                return false;
+            }
+        }
+
+        // Filter empty titles (often system windows)
+        if title.is_empty() {
+            println!("Filtered: empty title");
             return false;
         }
 
@@ -132,19 +158,98 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
             std::mem::size_of::<u32>() as u32,
         );
         if cloaked != 0 {
+            println!("Filtered: cloaked window");
             return false;
         }
 
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
 
+        // Filter tool windows
         if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
+            println!("Filtered: tool window");
             return false;
         }
 
+        // Filter non-activatable windows
         if ex_style & WS_EX_NOACTIVATE.0 != 0 {
+            println!("Filtered: non-activatable");
             return false;
         }
 
+        // Filter dialog modal frame windows (explicit dialogs)
+        if ex_style & WS_EX_DLGMODALFRAME.0 != 0 {
+            println!("Filtered: dialog modal frame");
+            return false;
+        }
+
+        // Filter transparent layered windows with 0 alpha
+        if ex_style & WS_EX_LAYERED.0 != 0 {
+            let mut alpha: u8 = 255;
+            let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+            let mut color = COLORREF(0);
+            if GetLayeredWindowAttributes(
+                hwnd,
+                Some(&mut color),
+                Some(&mut alpha),
+                Some(&mut flags),
+            )
+            .is_ok()
+                && alpha == 0
+            {
+                println!("Filtered: fully transparent layered window");
+                return false;
+            }
+        }
+
+        // Filter owned windows (typically dialogs)
+        let owner = GetWindow(hwnd, GW_OWNER);
+        if owner.is_ok() && !owner.unwrap().0.is_null() {
+            println!("Filtered: owned window (dialog)");
+            return false;
+        }
+
+        // Check window size - filter very small windows (tooltips, notifications)
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_ok() {
+            let width = rect.right - rect.left;
+            let height = rect.bottom - rect.top;
+
+            // Filter windows smaller than 100x100 (likely tooltips, popups)
+            if width < 100 || height < 100 {
+                println!("Filtered: too small ({}x{})", width, height);
+                return false;
+            }
+
+            // Filter zero-size windows
+            if width <= 0 || height <= 0 {
+                println!("Filtered: zero size");
+                return false;
+            }
+
+            // Filter windows positioned entirely off-screen (likely hidden)
+            // This helps filter ghost windows
+            if rect.right < -1000 || rect.bottom < -1000 || rect.left > 10000 || rect.top > 10000 {
+                println!("Filtered: positioned off-screen");
+                return false;
+            }
+        } else {
+            println!("Filtered: couldn't get window rect");
+            return false;
+        }
+
+        // Filter popup windows without resizable frame (likely dialogs)
+        let is_popup = style & WS_POPUP.0 != 0;
+        let has_thick_frame = style & WS_THICKFRAME.0 != 0;
+        let has_caption = style & WS_CAPTION.0 != 0;
+
+        // A popup without thick frame and without app window style is likely a dialog
+        if is_popup && !has_thick_frame && (ex_style & WS_EX_APPWINDOW.0 == 0) {
+            println!("Filtered: popup without thick frame");
+            return false;
+        }
+
+        // System class filtering
         let system_classes = [
             "Shell_TrayWnd",
             "Shell_SecondaryTrayWnd",
@@ -154,24 +259,53 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
             "DV2ControlHost",
             "XamlExplorerHostIslandWindow",
             "Windows.UI.Core.CoreWindow",
+            "tooltips_class32",
+            "IME",
+            "MSCTFIME UI",
+            "#32770", // Standard Windows dialog class
+            "SysShadow",
+            "MegaTileStatusBar", // Filter our own status bar
+            "TaskListThumbnailWnd",
+            "TaskSwitcherWnd",
+            "TaskSwitcherOverlayWnd",
+            "MultitaskingViewFrame",
+            "ForegroundStaging",
+            "ApplicationFrameWindow",
+            "Windows.Internal.Shell.TabProxyWindow",
         ];
 
         for sys_class in &system_classes {
             if class_name.eq_ignore_ascii_case(sys_class) {
+                println!("Filtered: system class {}", sys_class);
                 return false;
             }
         }
 
+        // Accept windows with WS_EX_APPWINDOW (explicitly meant for taskbar)
         if ex_style & WS_EX_APPWINDOW.0 != 0 {
-            println!("Is normal, case 1");
+            println!("Is normal, case 1: WS_EX_APPWINDOW");
             return true;
         }
 
-        if !title.trim().is_empty() {
-            println!("Is normal, case 2");
+        // Accept windows with a title that have both caption and thick frame (resizable)
+        if has_caption && has_thick_frame {
+            println!("Is normal, case 2: titled with caption and thick frame");
             return true;
         }
 
+        // Accept windows with a title and overlapped style (standard app window)
+        if style & WS_OVERLAPPEDWINDOW.0 != 0 {
+            println!("Is normal, case 3: titled with overlapped window style");
+            return true;
+        }
+
+        // Accept captioned windows
+        if has_caption {
+            println!("Is normal, case 4: has caption");
+            return true;
+        }
+
+        println!("Filtered: doesn't match any normal window criteria");
         false
     }
 }
@@ -434,4 +568,55 @@ pub fn reset_window_decorations(hwnd: HWND) -> Result<(), String> {
     set_window_border_color(hwnd, DWMWA_COLOR_DEFAULT)?;
     set_window_transparency(hwnd, 255)?;
     Ok(())
+}
+
+/// Gets the DWM extended frame bounds for a window.
+/// Returns the actual visible bounds (excluding invisible DWM borders).
+pub fn get_dwm_frame_bounds(hwnd: HWND) -> Result<RECT, String> {
+    let mut frame_rect = RECT::default();
+    unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut frame_rect as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<RECT>() as u32,
+        )
+        .map_err(|e| format!("Failed to get DWM frame bounds: {}", e))?;
+    }
+    Ok(frame_rect)
+}
+
+/// Gets the invisible border sizes for a window (difference between window rect and DWM frame).
+/// Returns (left, top, right, bottom) border sizes.
+pub fn get_invisible_borders(hwnd: HWND) -> (i32, i32, i32, i32) {
+    let window_rect = match get_window_rect(hwnd) {
+        Ok(r) => r,
+        Err(_) => return (0, 0, 0, 0),
+    };
+
+    let frame_rect = match get_dwm_frame_bounds(hwnd) {
+        Ok(r) => r,
+        Err(_) => return (0, 0, 0, 0),
+    };
+
+    // Calculate the invisible borders
+    let left = frame_rect.left - window_rect.left;
+    let top = frame_rect.top - window_rect.top;
+    let right = window_rect.right - frame_rect.right;
+    let bottom = window_rect.bottom - frame_rect.bottom;
+
+    (left, top, right, bottom)
+}
+
+/// Adjusts a target rect to compensate for DWM invisible borders.
+/// Returns a rect that, when set, will result in the visible area matching the target.
+pub fn adjust_rect_for_dwm_borders(hwnd: HWND, target: &RECT) -> RECT {
+    let (left_border, top_border, right_border, bottom_border) = get_invisible_borders(hwnd);
+
+    RECT {
+        left: target.left - left_border,
+        top: target.top - top_border,
+        right: target.right + right_border,
+        bottom: target.bottom + bottom_border,
+    }
 }

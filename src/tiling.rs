@@ -137,11 +137,12 @@ impl DwindleTiler {
         // For now, use full monitor rect
         // TODO: Consider taskbar and other reserved areas
         let mut rect = monitor.rect;
-        // Add gap padding
-        rect.left += self.gap;
-        rect.top += self.gap + STATUSBAR_VERTICAL_RESERVE;
-        rect.right -= self.gap;
-        rect.bottom -= self.gap;
+        // Add minimal gap padding - use smaller gaps at edges for tighter layout
+        let edge_gap = 2; // Minimal edge gap
+        rect.left += edge_gap;
+        rect.top += STATUSBAR_VERTICAL_RESERVE; // No extra gap, status bar reserve is enough
+        rect.right -= edge_gap;
+        rect.bottom -= edge_gap; // Minimal gap at bottom
         if rect.top > rect.bottom {
             rect.top = rect.bottom;
         }
@@ -392,6 +393,6 @@ impl DwindleTiler {
 
 impl Default for DwindleTiler {
     fn default() -> Self {
-        Self::new(8) // Default 8px gap
+        Self::new(4) // Default 4px gap for minimal spacing
     }
 }

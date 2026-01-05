@@ -69,6 +69,9 @@ impl Workspace {
             self.focused_window_hwnd = Some(window.hwnd);
         }
         self.windows.push(window);
+
+        // Clear the layout tree when windows change - force fresh layout calculation
+        self.layout_tree = None;
     }
 
     /// Removes a window by handle, returning it if found.
@@ -88,6 +91,9 @@ impl Workspace {
         {
             self.focused_window_hwnd = Some(first_tiled.hwnd);
         }
+
+        // Clear the layout tree when windows change - force fresh layout calculation
+        self.layout_tree = None;
 
         Some(removed)
     }

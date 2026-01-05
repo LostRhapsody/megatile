@@ -64,9 +64,15 @@ impl WorkspaceManager {
 
     /// Updates the status bar to reflect the current workspace.
     pub fn update_statusbar(&mut self) {
+        let workspace_num = self.active_workspace_global;
+        let mut occupied_6_9 = 0u8;
+        for ws in 6..=9 {
+            if self.get_workspace_window_count(ws) > 0 {
+                occupied_6_9 |= 1 << (ws - 6);
+            }
+        }
         if let Some(statusbar) = self.statusbar.as_mut() {
-            let workspace_num = self.active_workspace_global;
-            statusbar.update_indicator(workspace_num, STATUSBAR_MAX_WORKSPACES);
+            statusbar.update_indicator(workspace_num, STATUSBAR_MAX_WORKSPACES, occupied_6_9);
         }
     }
 
@@ -803,20 +809,24 @@ impl WorkspaceManager {
         Ok(())
     }
 
-    /// Sets a window's position and size.
+    /// Sets a window's position and size, accounting for DWM invisible borders.
     fn set_window_position(&self, hwnd: HWND, rect: &RECT) {
         unsafe {
             // Restore the window if it's maximized, as SetWindowPos doesn't work on maximized windows
             if IsZoomed(hwnd).as_bool() {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
             }
+
+            // Adjust for DWM invisible borders so the visible area matches our target
+            let adjusted_rect = crate::windows_lib::adjust_rect_for_dwm_borders(hwnd, rect);
+
             SetWindowPos(
                 hwnd,
                 None,
-                rect.left,
-                rect.top,
-                rect.right - rect.left,
-                rect.bottom - rect.top,
+                adjusted_rect.left,
+                adjusted_rect.top,
+                adjusted_rect.right - adjusted_rect.left,
+                adjusted_rect.bottom - adjusted_rect.top,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             )
             .ok();
