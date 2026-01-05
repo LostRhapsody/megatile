@@ -19,6 +19,7 @@ pub struct Window {
     pub is_focused: bool,
     pub is_tiled: bool,
     pub original_rect: RECT, // For restoring from fullscreen/hidden state
+    pub is_fullscreen: bool,
 }
 
 impl Window {
@@ -31,6 +32,7 @@ impl Window {
             is_focused: false,
             is_tiled: true,
             original_rect: rect,
+            is_fullscreen: false,
         }
     }
 }

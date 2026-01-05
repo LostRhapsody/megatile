@@ -263,6 +263,9 @@ impl WorkspaceManager {
         );
         self.tile_active_workspaces();
 
+        // Exit fullscreen on all windows in old workspace
+        self.exit_fullscreen_workspace(old_workspace);
+
         // Hide windows from old workspace
         println!("DEBUG: Hiding windows from workspace {}", old_workspace);
         self.hide_workspace_windows(old_workspace)?;
@@ -1123,6 +1126,85 @@ impl WorkspaceManager {
 
         println!("Window closed and workspace re-tiled");
         Ok(())
+    }
+
+    pub fn toggle_fullscreen(&mut self) -> Result<(), String> {
+        // Get currently focused window
+        let focused = self.get_focused_window();
+
+        if focused.is_none() {
+            return Err("No focused window".to_string());
+        }
+
+        let focused_hwnd = HWND(focused.unwrap().hwnd as _);
+
+        // Find and update the window in workspace
+        let mut monitors = self.monitors.lock().unwrap();
+
+        for monitor in monitors.iter_mut() {
+            let monitor_rect = monitor.rect;
+            if let Some(workspace) = monitor.get_workspace_mut(monitor.active_workspace) {
+                if let Some(window) = workspace.get_window_mut(focused_hwnd) {
+                    if window.is_fullscreen {
+                        // Restore from fullscreen
+                        println!("Restoring window {:?} from fullscreen", focused_hwnd);
+                        crate::windows_lib::restore_window_from_fullscreen(
+                            focused_hwnd,
+                            window.original_rect,
+                        )?;
+                        window.is_fullscreen = false;
+                    } else {
+                        // Set to fullscreen
+                        println!("Setting window {:?} to fullscreen", focused_hwnd);
+                        window.original_rect = window.rect; // Store current position
+                        crate::windows_lib::set_window_fullscreen(focused_hwnd, monitor_rect)?;
+                        window.is_fullscreen = true;
+                    }
+
+                    return Ok(());
+                }
+            }
+        }
+
+        Err("Window not found in active workspace".to_string())
+    }
+
+    pub fn exit_fullscreen_all(&mut self) {
+        let mut monitors = self.monitors.lock().unwrap();
+
+        for monitor in monitors.iter_mut() {
+            for workspace in &mut monitor.workspaces {
+                for window in &mut workspace.windows {
+                    if window.is_fullscreen {
+                        crate::windows_lib::restore_window_from_fullscreen(
+                            HWND(window.hwnd as _),
+                            window.original_rect,
+                        )
+                        .ok();
+                        window.is_fullscreen = false;
+                    }
+                }
+            }
+        }
+    }
+
+    fn exit_fullscreen_workspace(&self, workspace_num: u8) {
+        let mut monitors = self.monitors.lock().unwrap();
+
+        for monitor in monitors.iter_mut() {
+            if let Some(workspace) = monitor.get_workspace_mut(workspace_num) {
+                for window in &mut workspace.windows {
+                    if window.is_fullscreen {
+                        crate::windows_lib::restore_window_from_fullscreen(
+                            HWND(window.hwnd as _),
+                            window.original_rect,
+                        )
+                        .ok();
+                        window.is_fullscreen = false;
+                    }
+                }
+            }
+        }
     }
 }
 

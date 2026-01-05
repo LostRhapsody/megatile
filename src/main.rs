@@ -373,16 +373,19 @@ fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<Wo
                 }
             }
         }
+        hotkeys::HotkeyAction::ToggleFullscreen => {
+            let mut wm = workspace_manager.lock().unwrap();
+            match wm.toggle_fullscreen() {
+                Ok(()) => println!("Fullscreen toggled"),
+                Err(e) => eprintln!("Failed to toggle fullscreen: {}", e),
+            }
+        }
         hotkeys::HotkeyAction::CloseWindow => {
             let mut wm = workspace_manager.lock().unwrap();
             match wm.close_focused_window() {
                 Ok(()) => println!("Window closed successfully"),
                 Err(e) => eprintln!("Failed to close window: {}", e),
             }
-        }
-        _ => {
-            println!("Hotkey action: {:?}", action);
-            // TODO: Implement other actions in future steps
         }
     }
 }

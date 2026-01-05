@@ -2,7 +2,8 @@ use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
+    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -244,5 +245,58 @@ pub fn force_close_window(hwnd: HWND) -> Result<(), String> {
         // Force terminate the window
         DestroyWindow(hwnd).map_err(|e| format!("Failed to destroy window: {}", e))?;
         Ok(())
+    }
+}
+
+pub fn set_window_fullscreen(hwnd: HWND, monitor_rect: RECT) -> Result<(), String> {
+    unsafe {
+        // Set window to fullscreen
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            monitor_rect.left,
+            monitor_rect.top,
+            monitor_rect.right - monitor_rect.left,
+            monitor_rect.bottom - monitor_rect.top,
+            SWP_SHOWWINDOW,
+        )
+        .map_err(|e| format!("Failed to set window fullscreen: {}", e))?;
+
+        Ok(())
+    }
+}
+
+pub fn restore_window_from_fullscreen(hwnd: HWND, original_rect: RECT) -> Result<(), String> {
+    unsafe {
+        // Restore original position and size
+        SetWindowPos(
+            hwnd,
+            Some(HWND_NOTOPMOST),
+            original_rect.left,
+            original_rect.top,
+            original_rect.right - original_rect.left,
+            original_rect.bottom - original_rect.top,
+            SWP_SHOWWINDOW | SWP_NOACTIVATE,
+        )
+        .map_err(|e| format!("Failed to restore window from fullscreen: {}", e))?;
+
+        Ok(())
+    }
+}
+
+pub fn get_monitor_rect(hwnd: HWND) -> Option<RECT> {
+    unsafe {
+        let mut monitor_info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+
+        let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+
+        if GetMonitorInfoW(hmonitor, &mut monitor_info).as_bool() {
+            Some(monitor_info.rcMonitor)
+        } else {
+            None
+        }
     }
 }
