@@ -1080,11 +1080,10 @@ impl WorkspaceManager {
     pub fn update_window_positions(&mut self) {
         // Get monitor rects first
         let monitor_rects: Vec<RECT> = self.monitors.iter().map(|m| m.rect).collect();
+        let mut moves: Vec<(isize, usize, usize)> = Vec::new(); // (hwnd, old_monitor_idx, new_monitor_idx)
+        let mut any_tiled_moved = false;
 
         for monitor_idx in 0..self.monitors.len() {
-            // We need to move windows between workspaces/monitors, so we collect them first
-            // or we use a more complex approach. For now, let's just update in place.
-
             // To avoid borrowing issues, we'll iterate through indices
             for ws_idx in 0..self.monitors[monitor_idx].workspaces.len() {
                 for win_idx in 0..self.monitors[monitor_idx].workspaces[ws_idx].windows.len() {
@@ -1111,6 +1110,9 @@ impl WorkspaceManager {
                             if !window.is_tiled {
                                 // If it's floating, also update its current tracking rect
                                 window.rect = current_rect;
+                            } else {
+                                // Tiled window moved, will need to re-tile
+                                any_tiled_moved = true;
                             }
                         }
 
@@ -1132,11 +1134,32 @@ impl WorkspaceManager {
                         if let Some(new_idx) = new_monitor_idx
                             && new_idx != window.monitor
                         {
+                            moves.push((window.hwnd, window.monitor, new_idx));
                             window.monitor = new_idx;
                         }
                     }
                 }
             }
+        }
+
+        // Apply moves
+        for (hwnd, _old_monitor_idx, new_monitor_idx) in moves {
+            if let Some(window) = self.remove_window(HWND(hwnd as _)) {
+                if let Some(new_monitor) = self.monitors.get_mut(new_monitor_idx) {
+                    let ws_idx = (window.workspace - 1) as usize;
+                    new_monitor.workspaces[ws_idx].add_window(window);
+                }
+            }
+        }
+
+        // If any tiled window moved, sort windows by position and re-tile
+        if any_tiled_moved {
+            for monitor in self.monitors.iter_mut() {
+                let ws_idx = (monitor.active_workspace - 1) as usize;
+                monitor.workspaces[ws_idx].windows.sort_by_key(|w| (w.rect.left, w.rect.top));
+            }
+            self.tile_active_workspaces();
+            self.apply_window_positions();
         }
     }
 
