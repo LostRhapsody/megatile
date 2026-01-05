@@ -344,8 +344,9 @@ pub fn get_monitor_rect(hwnd: HWND) -> Option<RECT> {
 /// Gets the Windows accent color and converts it to COLORREF format (0x00BBGGRR).
 pub fn get_accent_color() -> Result<u32, String> {
     let mut color = 0u32;
+    let mut pfopaque = BOOL(0);
     unsafe {
-        DwmGetColorizationColor(&mut color, ptr::null_mut())
+        DwmGetColorizationColor(&mut color, &mut pfopaque)
             .map_err(|e| format!("Failed to get accent color: {}", e))?;
     }
     // color is 0xAARRGGBB. Convert to 0x00BBGGRR (COLORREF format)
@@ -389,7 +390,7 @@ pub fn set_window_transparency(hwnd: HWND, alpha: u8) -> Result<(), String> {
             if result == 0 && GetLastError() != WIN32_ERROR(0) {
                 return Err(format!(
                     "Failed to clear layered style: {}",
-                    windows::core::Error::from_win32()
+                    windows::core::Error::from_thread()
                 ));
             }
         } else {
@@ -401,7 +402,7 @@ pub fn set_window_transparency(hwnd: HWND, alpha: u8) -> Result<(), String> {
             if result == 0 && GetLastError() != WIN32_ERROR(0) {
                 return Err(format!(
                     "Failed to set layered style: {}",
-                    windows::core::Error::from_win32()
+                    windows::core::Error::from_thread()
                 ));
             }
             // COLORREF(0) is unused when LWA_ALPHA flag is set

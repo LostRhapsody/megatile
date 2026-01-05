@@ -1,17 +1,19 @@
 use std::sync::OnceLock;
-use windows::Win32::Foundation::{BOOL, COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, Ellipse, EndPaint,
-    GetClientRect, HBRUSH, HDC, HPEN, PAINTSTRUCT, PS_SOLID, RoundRect, SelectObject,
+    HBRUSH, HDC, HPEN, InvalidateRect, PAINTSTRUCT, PS_SOLID, RoundRect, SelectObject,
+    SetWindowRgn,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
-    GetWindowLongPtrW, HMENU, HWND_TOPMOST, IDC_ARROW, InvalidateRect, LoadCursorW, RegisterClassW,
-    SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SetWindowLongPtrW, SetWindowPos, SetWindowRgn, ShowWindow,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WNDCLASSW,
+    GetClientRect, GetWindowLongPtrW, HMENU, HWND_TOPMOST, IDC_ARROW, LoadCursorW, RegisterClassW,
+    SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WNDCLASSW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{BOOL, PCWSTR, w};
 
 use crate::windows_lib::get_accent_color;
 
@@ -48,12 +50,13 @@ pub struct StatusBar {
 
 impl StatusBar {
     pub fn new(owner_hwnd: HWND) -> Result<Self, String> {
-        let hinstance =
-            GetModuleHandleW(None).map_err(|e| format!("Failed to get module handle: {}", e))?;
-        ensure_class(hinstance)?;
+        let hinstance = unsafe {
+            GetModuleHandleW(None).map_err(|e| format!("Failed to get module handle: {}", e))
+        }?;
+        ensure_class(hinstance.into())?;
 
         let accent_color = get_accent_color().unwrap_or(DEFAULT_ACCENT_COLOR);
-        let mut state = Box::new(StatusBarState {
+        let state = Box::new(StatusBarState {
             active_workspace: 1,
             total_workspaces: STATUSBAR_VISIBLE_DOTS,
             accent_color,
@@ -71,7 +74,7 @@ impl StatusBar {
                 STATUSBAR_HEIGHT,
                 Some(owner_hwnd),
                 Some(HMENU::default()),
-                Some(hinstance),
+                Some(hinstance.into()),
                 None,
             )
             .map_err(|e| format!("Failed to create status bar window: {}", e))?
@@ -105,7 +108,7 @@ impl StatusBar {
             self.state.accent_color = color;
         }
         unsafe {
-            InvalidateRect(self.hwnd, None, BOOL(0));
+            InvalidateRect(Some(self.hwnd), None, BOOL(0).into());
         }
     }
 
@@ -135,7 +138,7 @@ impl StatusBar {
     fn update_region(&self, width: i32, height: i32) {
         unsafe {
             let region = CreateRoundRectRgn(0, 0, width, height, CORNER_RADIUS, CORNER_RADIUS);
-            let _ = SetWindowRgn(self.hwnd, region, BOOL(1));
+            let _ = SetWindowRgn(self.hwnd, Some(region), BOOL(1).into());
         }
     }
 }
@@ -183,7 +186,7 @@ extern "system" fn statusbar_wnd_proc(
             }
             WM_ERASEBKGND => return LRESULT(1),
             WM_NCDESTROY => {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             }
             _ => {}
         }
@@ -193,50 +196,54 @@ extern "system" fn statusbar_wnd_proc(
 }
 
 unsafe fn paint_statusbar(hwnd: HWND) {
-    let state_ptr = get_state_ptr(hwnd);
-    if state_ptr.is_null() {
-        return;
-    }
+    unsafe {
+        let state_ptr = get_state_ptr(hwnd);
+        if state_ptr.is_null() {
+            return;
+        }
 
-    let state = &*state_ptr;
+        let state = &*state_ptr;
 
-    let mut ps = PAINTSTRUCT::default();
-    let hdc = BeginPaint(hwnd, &mut ps);
-    if hdc.0 == 0 {
-        return;
-    }
+        let mut ps = PAINTSTRUCT::default();
+        let hdc = BeginPaint(hwnd, &mut ps);
+        if hdc.0.is_null() {
+            return;
+        }
 
-    let mut rect = RECT::default();
-    GetClientRect(hwnd, &mut rect);
+        let mut rect = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rect);
 
-    draw_background(hdc, &rect, state.accent_color);
-    draw_workspace_dots(hdc, &rect, state);
+        draw_background(hdc, &rect, state.accent_color);
+        draw_workspace_dots(hdc, &rect, state);
 
-    EndPaint(hwnd, &mut ps);
+        let _ = EndPaint(hwnd, &ps);
+    };
 }
 
 unsafe fn draw_background(hdc: HDC, rect: &RECT, accent_color: u32) {
     let bg_color = subtle_background(accent_color);
-    let brush = CreateSolidBrush(COLORREF(bg_color));
-    let pen = CreatePen(PS_SOLID, 1, COLORREF(accent_color));
+    unsafe {
+        let brush = CreateSolidBrush(COLORREF(bg_color));
+        let pen = CreatePen(PS_SOLID, 1, COLORREF(accent_color));
 
-    let old_pen = SelectObject(hdc, pen);
-    let old_brush = SelectObject(hdc, brush);
+        let old_pen = SelectObject(hdc, pen.into());
+        let old_brush = SelectObject(hdc, brush.into());
 
-    RoundRect(
-        hdc,
-        rect.left,
-        rect.top,
-        rect.right,
-        rect.bottom,
-        CORNER_RADIUS,
-        CORNER_RADIUS,
-    );
+        let _ = RoundRect(
+            hdc,
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom,
+            CORNER_RADIUS,
+            CORNER_RADIUS,
+        );
 
-    SelectObject(hdc, old_pen);
-    SelectObject(hdc, old_brush);
-    DeleteObject(pen);
-    DeleteObject(brush);
+        SelectObject(hdc, old_pen);
+        SelectObject(hdc, old_brush);
+        let _ = DeleteObject(pen.into());
+        let _ = DeleteObject(brush.into());
+    };
 }
 
 unsafe fn draw_workspace_dots(hdc: HDC, rect: &RECT, state: &StatusBarState) {
@@ -264,17 +271,19 @@ unsafe fn draw_workspace_dots(hdc: HDC, rect: &RECT, state: &StatusBarState) {
 
         let x = start_x + (i as i32) * DOT_SPACING;
 
-        let brush: HBRUSH = CreateSolidBrush(COLORREF(color));
-        let pen: HPEN = CreatePen(PS_SOLID, 1, COLORREF(color));
-        let old_pen = SelectObject(hdc, pen);
-        let old_brush = SelectObject(hdc, brush);
+        unsafe {
+            let brush: HBRUSH = CreateSolidBrush(COLORREF(color));
+            let pen: HPEN = CreatePen(PS_SOLID, 1, COLORREF(color));
+            let old_pen = SelectObject(hdc, pen.into());
+            let old_brush = SelectObject(hdc, brush.into());
 
-        Ellipse(hdc, x, center_y, x + DOT_DIAMETER, center_y + DOT_DIAMETER);
+            let _ = Ellipse(hdc, x, center_y, x + DOT_DIAMETER, center_y + DOT_DIAMETER);
 
-        SelectObject(hdc, old_pen);
-        SelectObject(hdc, old_brush);
-        DeleteObject(pen);
-        DeleteObject(brush);
+            SelectObject(hdc, old_pen);
+            SelectObject(hdc, old_brush);
+            let _ = DeleteObject(pen.into());
+            let _ = DeleteObject(brush.into());
+        }
     }
 }
 
@@ -329,7 +338,7 @@ fn compose_color(r: u8, g: u8, b: u8) -> u32 {
 }
 
 unsafe fn get_state_ptr(hwnd: HWND) -> *mut StatusBarState {
-    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
     if ptr == 0 {
         std::ptr::null_mut()
     } else {

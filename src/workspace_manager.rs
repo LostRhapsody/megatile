@@ -103,10 +103,10 @@ impl WorkspaceManager {
                 if let Err(e) = set_window_border_color(hwnd, accent_color) {
                     eprintln!("Failed to set window border color: {}", e);
                 }
-            } else if previous_alpha != Some(desired_alpha) {
-                if let Err(e) = reset_window_decorations(hwnd) {
-                    eprintln!("Failed to reset window decorations: {}", e);
-                }
+            } else if previous_alpha != Some(desired_alpha)
+                && let Err(e) = reset_window_decorations(hwnd)
+            {
+                eprintln!("Failed to reset window decorations: {}", e);
             }
 
             if previous_alpha != Some(desired_alpha) {
@@ -1239,11 +1239,11 @@ impl WorkspaceManager {
 
         // Apply moves
         for (hwnd, _old_monitor_idx, new_monitor_idx) in moves {
-            if let Some(window) = self.remove_window(HWND(hwnd as _)) {
-                if let Some(new_monitor) = self.monitors.get_mut(new_monitor_idx) {
-                    let ws_idx = (window.workspace - 1) as usize;
-                    new_monitor.workspaces[ws_idx].add_window(window);
-                }
+            if let Some(window) = self.remove_window(HWND(hwnd as _))
+                && let Some(new_monitor) = self.monitors.get_mut(new_monitor_idx)
+            {
+                let ws_idx = (window.workspace - 1) as usize;
+                new_monitor.workspaces[ws_idx].add_window(window);
             }
         }
 
@@ -1425,28 +1425,27 @@ impl WorkspaceManager {
 
         // Find the workspace and monitor for the focused window
         for monitor in self.monitors.iter_mut() {
-            if let Some(workspace) = monitor.get_workspace_mut(monitor.active_workspace) {
-                if let Some(layout_tree) = workspace.layout_tree.as_mut() {
-                    // Find the ancestor tile with matching split direction
-                    let target_direction = match direction {
-                        ResizeDirection::Horizontal => crate::tiling::SplitDirection::Vertical,
-                        ResizeDirection::Vertical => crate::tiling::SplitDirection::Horizontal,
-                    };
+            if let Some(workspace) = monitor.get_workspace_mut(monitor.active_workspace)
+                && let Some(layout_tree) = workspace.layout_tree.as_mut()
+            {
+                // Find the ancestor tile with matching split direction
+                let target_direction = match direction {
+                    ResizeDirection::Horizontal => crate::tiling::SplitDirection::Vertical,
+                    ResizeDirection::Vertical => crate::tiling::SplitDirection::Horizontal,
+                };
 
-                    if let Some(target_tile) = Self::find_ancestor_with_direction(
-                        layout_tree,
-                        focused_window.hwnd,
-                        target_direction,
-                    ) {
-                        // Adjust the split ratio
-                        target_tile.split_ratio =
-                            (target_tile.split_ratio + amount).clamp(0.1, 0.9);
+                if let Some(target_tile) = Self::find_ancestor_with_direction(
+                    layout_tree,
+                    focused_window.hwnd,
+                    target_direction,
+                ) {
+                    // Adjust the split ratio
+                    target_tile.split_ratio = (target_tile.split_ratio + amount).clamp(0.1, 0.9);
 
-                        // Re-apply tiling with updated ratios
-                        self.tile_active_workspaces();
-                        self.apply_window_positions();
-                        return Ok(());
-                    }
+                    // Re-apply tiling with updated ratios
+                    self.tile_active_workspaces();
+                    self.apply_window_positions();
+                    return Ok(());
                 }
             }
         }
@@ -1454,11 +1453,11 @@ impl WorkspaceManager {
         Err("No suitable ancestor found for resizing in this direction".to_string())
     }
 
-    fn find_ancestor_with_direction<'a>(
-        tile: &'a mut crate::tiling::Tile,
+    fn find_ancestor_with_direction(
+        tile: &mut crate::tiling::Tile,
         hwnd: isize,
         target_direction: crate::tiling::SplitDirection,
-    ) -> Option<&'a mut crate::tiling::Tile> {
+    ) -> Option<&mut crate::tiling::Tile> {
         // Check if any child contains the window and has a deeper ancestor matching the direction
         let mut search_deeper = false;
         if let Some(ref children) = tile.children {
@@ -1466,10 +1465,10 @@ impl WorkspaceManager {
                 if Self::has_ancestor_with_direction(&children.0, hwnd, target_direction) {
                     search_deeper = true;
                 }
-            } else if Self::tree_contains_window(&children.1, hwnd) {
-                if Self::has_ancestor_with_direction(&children.1, hwnd, target_direction) {
-                    search_deeper = true;
-                }
+            } else if Self::tree_contains_window(&children.1, hwnd)
+                && Self::has_ancestor_with_direction(&children.1, hwnd, target_direction)
+            {
+                search_deeper = true;
             }
         }
 
@@ -1502,10 +1501,10 @@ impl WorkspaceManager {
                 if Self::has_ancestor_with_direction(&children.0, hwnd, target_direction) {
                     return true;
                 }
-            } else if Self::tree_contains_window(&children.1, hwnd) {
-                if Self::has_ancestor_with_direction(&children.1, hwnd, target_direction) {
-                    return true;
-                }
+            } else if Self::tree_contains_window(&children.1, hwnd)
+                && Self::has_ancestor_with_direction(&children.1, hwnd, target_direction)
+            {
+                return true;
             }
 
             if tile.split_direction == Some(target_direction) {
@@ -1521,12 +1520,11 @@ impl WorkspaceManager {
     ) -> Option<&mut crate::tiling::Tile> {
         // Check if any child is a parent
         let mut search_deeper = false;
-        if let Some(ref children) = tile.children {
-            if Self::has_parent_in_subtree(&children.0, hwnd)
-                || Self::has_parent_in_subtree(&children.1, hwnd)
-            {
-                search_deeper = true;
-            }
+        if let Some(ref children) = tile.children
+            && (Self::has_parent_in_subtree(&children.0, hwnd)
+                || Self::has_parent_in_subtree(&children.1, hwnd))
+        {
+            search_deeper = true;
         }
 
         if search_deeper {
@@ -1581,28 +1579,27 @@ impl WorkspaceManager {
 
         // Find the workspace and monitor for the focused window
         for monitor in self.monitors.iter_mut() {
-            if let Some(workspace) = monitor.get_workspace_mut(monitor.active_workspace) {
-                if let Some(layout_tree) = workspace.layout_tree.as_mut() {
-                    // Find the tile containing the focused window
-                    if let Some(parent_tile) =
-                        Self::find_parent_tile(layout_tree, focused_window.hwnd)
-                    {
-                        // Flip the split direction
-                        parent_tile.split_direction = match parent_tile.split_direction {
-                            Some(crate::tiling::SplitDirection::Horizontal) => {
-                                Some(crate::tiling::SplitDirection::Vertical)
-                            }
-                            Some(crate::tiling::SplitDirection::Vertical) => {
-                                Some(crate::tiling::SplitDirection::Horizontal)
-                            }
-                            None => None,
-                        };
+            if let Some(workspace) = monitor.get_workspace_mut(monitor.active_workspace)
+                && let Some(layout_tree) = workspace.layout_tree.as_mut()
+            {
+                // Find the tile containing the focused window
+                if let Some(parent_tile) = Self::find_parent_tile(layout_tree, focused_window.hwnd)
+                {
+                    // Flip the split direction
+                    parent_tile.split_direction = match parent_tile.split_direction {
+                        Some(crate::tiling::SplitDirection::Horizontal) => {
+                            Some(crate::tiling::SplitDirection::Vertical)
+                        }
+                        Some(crate::tiling::SplitDirection::Vertical) => {
+                            Some(crate::tiling::SplitDirection::Horizontal)
+                        }
+                        None => None,
+                    };
 
-                        // Re-apply tiling with flipped direction
-                        self.tile_active_workspaces();
-                        self.apply_window_positions();
-                        return Ok(());
-                    }
+                    // Re-apply tiling with flipped direction
+                    self.tile_active_workspaces();
+                    self.apply_window_positions();
+                    return Ok(());
                 }
             }
         }
