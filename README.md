@@ -31,6 +31,10 @@ MegaTile aims to be simple, fast, and effective.
 | `Alt + W` | Close current window |
 | `Alt + T` | Toggle current window's tiling state |
 | `Alt + F` | Toggle fullscreen |
+| `Alt + B` | Toggle status bar |
+| `Alt + J` | Flip current region |
+| `Alt +  +/-` | Resize horizontally |
+| `Alt + Shift +  +/-` | Resize vertically |
 
 ## Status
 
