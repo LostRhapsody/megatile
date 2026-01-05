@@ -9,18 +9,22 @@ mod tray;
 mod windows_lib;
 mod workspace;
 mod workspace_manager;
+mod statusbar;
 
 use hotkeys::HotkeyManager;
+use statusbar::StatusBar;
 use std::collections::VecDeque;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tray::TrayManager;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Graphics::Gdi::{CreateFontW, FW_NORMAL, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, FF_DONTCARE, HFONT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::PCWSTR;
-use windows_lib::{enumerate_monitors, get_normal_windows, show_window_in_taskbar};
+use windows::core::{PCWSTR, w};
+use windows_lib::{enumerate_monitors, get_normal_windows, show_window_in_taskbar, reset_window_decorations};
 use workspace_manager::WorkspaceManager;
 
 static CLASS_NAME: [u16; 22] = [
@@ -35,6 +39,7 @@ enum WindowEvent {
     WindowCreated(isize),
     WindowDestroyed(isize),
     WindowMoved(isize),
+    FocusChanged(isize),
     DisplayChange,
     PeriodicCheck,
     TrayExit,
@@ -64,6 +69,9 @@ unsafe extern "system" fn win_event_proc(
     }
 
     match event {
+        EVENT_SYSTEM_FOREGROUND => {
+            push_event(WindowEvent::FocusChanged(hwnd.0 as isize));
+        }
         EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW => {
             push_event(WindowEvent::WindowCreated(hwnd.0 as isize));
         }
@@ -101,6 +109,7 @@ fn cleanup_on_exit(wm: &mut WorkspaceManager) {
                 eprintln!("  ✗ Failed to restore window {:?}: {}", hwnd, e);
             }
         }
+        reset_window_decorations(hwnd_handle);
     }
 
     println!(
@@ -225,6 +234,36 @@ fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
             Ok(()) => println!("Window closed successfully"),
             Err(e) => eprintln!("Failed to close window: {}", e),
         },
+        hotkeys::HotkeyAction::ToggleStatusBar => {
+            // This is handled in the main loop to manage visibility state
+        }
+    }
+}
+
+fn create_statusbar_font() -> Result<HFONT, String> {
+    unsafe {
+        let font = CreateFontW(
+            20,
+            0,
+            0,
+            0,
+            FW_NORMAL.0 as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            w!("Segoe UI"),
+        );
+
+        if font.is_invalid() {
+            return Err("Failed to create font".to_string());
+        }
+
+        Ok(font)
     }
 }
 
@@ -293,8 +332,8 @@ fn main() {
     // Setup window event hooks
     let _event_hook = unsafe {
         SetWinEventHook(
-            EVENT_OBJECT_CREATE,
-            EVENT_OBJECT_LOCATIONCHANGE, // This also covers move/resize
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_OBJECT_LOCATIONCHANGE,
             None,
             Some(win_event_proc),
             0,
@@ -314,6 +353,28 @@ fn main() {
     hotkey_manager
         .register_hotkeys(hwnd)
         .expect("Failed to register hotkeys");
+
+    // Initialize status bar
+    let statusbar = StatusBar::new(hwnd).expect("Failed to create status bar");
+    let statusbar_font = create_statusbar_font().expect("Failed to create status bar font");
+    statusbar.set_font(statusbar_font);
+
+    // Set status bar position and size (top center of primary monitor)
+    let monitor_infos = windows_lib::enumerate_monitors();
+    if let Some(primary_monitor) = monitor_infos.iter().find(|m| m.is_primary) {
+        let rect = primary_monitor.rect;
+        let statusbar_width = 400;
+        let statusbar_height = 30;
+        let x = rect.left + (rect.right - rect.left - statusbar_width) / 2;
+        let y = rect.top + 5; // Slight offset from top
+
+        statusbar.set_position(x, y, statusbar_width, statusbar_height);
+    }
+
+    let statusbar_visible = Arc::new(AtomicBool::new(true));
+    wm.set_statusbar(statusbar);
+    wm.update_statusbar();
+    wm.update_decorations();
 
     println!("MegaTile is running. Use the tray icon to exit.");
 
@@ -367,7 +428,16 @@ fn main() {
             if let Some(event) = event {
                 match event {
                     WindowEvent::Hotkey(action) => {
-                        handle_action(action, &mut wm);
+                        if let hotkeys::HotkeyAction::ToggleStatusBar = action {
+                            let wm_lock = &mut wm;
+                            let current = statusbar_visible.load(Ordering::SeqCst);
+                            let new_val = !current;
+                            statusbar_visible.store(new_val, Ordering::SeqCst);
+                            
+                            wm_lock.toggle_statusbar(new_val);
+                        } else {
+                            handle_action(action, &mut wm);
+                        }
                     }
                     WindowEvent::WindowCreated(hwnd_val) => {
                         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
@@ -410,6 +480,10 @@ fn main() {
                     }
                     WindowEvent::WindowMoved(_hwnd_val) => {
                         wm.update_window_positions();
+                        wm.update_statusbar();
+                    }
+                    WindowEvent::FocusChanged(_hwnd_val) => {
+                        wm.update_decorations();
                     }
                     WindowEvent::DisplayChange => {
                         println!("Event: Display Change");
@@ -419,6 +493,7 @@ fn main() {
                     }
                     WindowEvent::PeriodicCheck => {
                         wm.update_window_positions();
+                        wm.update_decorations();
                         if wm.check_monitor_changes() {
                             println!("Monitor change detected by periodic check");
                             if let Err(e) = wm.reenumerate_monitors() {

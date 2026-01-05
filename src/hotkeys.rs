@@ -38,6 +38,7 @@ pub enum HotkeyAction {
     CloseWindow,
     ToggleTiling,
     ToggleFullscreen,
+    ToggleStatusBar,
 }
 
 impl HotkeyManager {
@@ -160,6 +161,12 @@ impl HotkeyManager {
                 35,
                 HotkeyAction::ToggleFullscreen,
             ), // F
+            (
+                MOD_ALT,
+                VIRTUAL_KEY(0x42),
+                45,
+                HotkeyAction::ToggleStatusBar,
+            ), // B
             // Move to workspace and follow (Alt + Ctrl + Shift + 1-9)
             (
                 MOD_ALT | MOD_SHIFT | MOD_CONTROL,

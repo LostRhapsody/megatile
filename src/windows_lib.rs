@@ -1,13 +1,16 @@
-use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE, WPARAM};
+use windows::core::BOOL;
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromWindow,
+    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::BOOL;
 
 const MONITORINFOF_PRIMARY: u32 = 1;
+const DWMWA_BORDER_COLOR: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(34);
+const DWMWA_COLOR_DEFAULT: u32 = 0xFFFFFFFF;
+const LWA_ALPHA: LAYERED_WINDOW_ATTRIBUTES_FLAGS = LAYERED_WINDOW_ATTRIBUTES_FLAGS(2);
 
 pub struct WindowInfo {
     pub hwnd: HWND,
@@ -333,4 +336,63 @@ pub fn get_monitor_rect(hwnd: HWND) -> Option<RECT> {
             None
         }
     }
+}
+
+pub fn get_accent_color() -> u32 {
+    let mut color = 0u32;
+    let mut opaque = BOOL(0);
+    unsafe {
+        let _ = DwmGetColorizationColor(&mut color, &mut opaque);
+    }
+    // color is 0xAARRGGBB. Convert to 0x00BBGGRR (COLORREF format)
+    let r = (color >> 16) & 0xFF;
+    let g = (color >> 8) & 0xFF;
+    let b = color & 0xFF;
+    (b << 16) | (g << 8) | r
+}
+
+pub fn set_window_border_color(hwnd: HWND, color: u32) {
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &color as *const _ as *const std::ffi::c_void,
+            4,
+        );
+    }
+}
+
+pub fn set_window_transparency(hwnd: HWND, alpha: u8) {
+    unsafe {
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        if alpha == 255 {
+            let _ = SetWindowLongW(
+                hwnd,
+                GWL_EXSTYLE,
+                (ex_style as u32 & !WS_EX_LAYERED.0) as i32,
+            );
+        } else {
+            let _ = SetWindowLongW(
+                hwnd,
+                GWL_EXSTYLE,
+                (ex_style as u32 | WS_EX_LAYERED.0) as i32,
+            );
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
+        }
+        // Force frame update
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+        );
+    }
+}
+
+pub fn reset_window_decorations(hwnd: HWND) {
+    set_window_border_color(hwnd, DWMWA_COLOR_DEFAULT);
+    set_window_transparency(hwnd, 255);
 }

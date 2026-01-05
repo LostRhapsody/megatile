@@ -1,16 +1,23 @@
 use super::workspace::{Monitor, Window};
+use crate::statusbar::StatusBar;
 use crate::tiling::DwindleTiler;
-use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
+use crate::windows_lib::{
+    get_accent_color, hide_window_from_taskbar, reset_window_decorations, set_window_border_color,
+    set_window_transparency, show_window_in_taskbar,
+};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsZoomed, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, ShowWindow,
+    GetForegroundWindow, IsZoomed, SW_RESTORE, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
+    ShowWindow,
 };
 
 pub struct WorkspaceManager {
     monitors: Vec<Monitor>,
     active_workspace_global: u8, // All monitors share the same active workspace
     last_reenumerate: Instant,
+    statusbar: Option<StatusBar>,
+    last_focused_hwnd: Option<isize>,
 }
 
 impl WorkspaceManager {
@@ -19,6 +26,63 @@ impl WorkspaceManager {
             monitors: Vec::new(),
             active_workspace_global: 1,
             last_reenumerate: Instant::now() - Duration::from_secs(60),
+            statusbar: None,
+            last_focused_hwnd: None,
+        }
+    }
+
+    pub fn set_statusbar(&mut self, statusbar: StatusBar) {
+        self.statusbar = Some(statusbar);
+    }
+
+    pub fn update_statusbar(&self) {
+        if let Some(statusbar) = &self.statusbar {
+            let workspace_num = self.active_workspace_global;
+            let window_count = self.get_active_workspace_window_count();
+            // In a future step, we can dynamically get the algorithm name
+            statusbar.update_full_status(workspace_num, window_count, "Dwindle");
+        }
+    }
+
+    pub fn toggle_statusbar(&mut self, visible: bool) {
+        if let Some(statusbar) = &self.statusbar {
+            if visible {
+                statusbar.show();
+                self.update_statusbar();
+            } else {
+                statusbar.hide();
+            }
+        }
+    }
+
+    pub fn get_active_workspace_window_count(&self) -> usize {
+        let mut count = 0;
+        for monitor in self.monitors.iter() {
+            count += monitor.get_active_workspace().windows.len();
+        }
+        count
+    }
+
+    pub fn update_decorations(&mut self) {
+        let focused_hwnd = unsafe { GetForegroundWindow() };
+
+        // If focus hasn't changed, we can still update if needed, but usually once is enough
+        self.last_focused_hwnd = Some(focused_hwnd.0 as isize);
+
+        let accent_color = get_accent_color();
+        let managed_hwnds = self.get_all_managed_hwnds();
+
+        for hwnd_val in managed_hwnds {
+            let hwnd = HWND(hwnd_val as _);
+            if hwnd == focused_hwnd {
+                // Focused window: Accent border, opaque
+                set_window_border_color(hwnd, accent_color);
+                set_window_transparency(hwnd, 255);
+            } else {
+                // Non-focused window: No custom border, subtle transparency
+                reset_window_decorations(hwnd);
+                set_window_transparency(hwnd, 230); // ~90% opaque
+            }
         }
     }
 
@@ -87,6 +151,8 @@ impl WorkspaceManager {
                 window.monitor, window.workspace
             );
             monitor.add_window(window);
+            self.update_statusbar();
+            self.update_decorations();
             println!("DEBUG: Window added successfully");
         } else {
             println!(
@@ -127,6 +193,8 @@ impl WorkspaceManager {
             // Re-tile the workspace that had the window removed
             self.tile_active_workspaces();
             self.apply_window_positions();
+            self.update_statusbar();
+            self.update_decorations();
             println!("DEBUG: Re-tiling completed after window removal");
         } else {
             println!("DEBUG: No window removed, skipping re-tiling");
@@ -368,6 +436,9 @@ impl WorkspaceManager {
         } else {
             println!("DEBUG: No window to focus in workspace {}", new_workspace);
         }
+
+        self.update_statusbar();
+        self.update_decorations();
 
         println!("DEBUG: Workspace switch completed successfully");
         Ok(())
@@ -1213,6 +1284,9 @@ impl WorkspaceManager {
             self.set_window_focus(hwnd);
         }
 
+        self.update_statusbar();
+        self.update_decorations();
+
         println!("Window closed and workspace re-tiled");
         Ok(())
     }
@@ -1259,6 +1333,8 @@ impl WorkspaceManager {
         if handled {
             self.tile_active_workspaces();
             self.apply_window_positions();
+            self.update_statusbar();
+            self.update_decorations();
             Ok(())
         } else {
             Err("Window not found in active workspace".to_string())
