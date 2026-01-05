@@ -25,9 +25,9 @@ use crate::windows_lib::get_accent_color;
 /// Maximum number of workspaces supported.
 pub const STATUSBAR_MAX_WORKSPACES: u8 = 9;
 /// Height of the status bar in pixels.
-pub const STATUSBAR_HEIGHT: i32 = 20;
+pub const STATUSBAR_HEIGHT: i32 = 34;
 /// Width of the status bar in pixels.
-pub const STATUSBAR_WIDTH: i32 = 280;
+pub const STATUSBAR_WIDTH: i32 = 360;
 /// Gap above the status bar.
 pub const STATUSBAR_TOP_GAP: i32 = 2;
 /// Gap below the status bar.
@@ -36,12 +36,14 @@ pub const STATUSBAR_BOTTOM_GAP: i32 = 2;
 pub const STATUSBAR_VERTICAL_RESERVE: i32 =
     STATUSBAR_TOP_GAP + STATUSBAR_HEIGHT + STATUSBAR_BOTTOM_GAP;
 
-const DOT_DIAMETER: i32 = 14;
-const DOT_SPACING: i32 = 18;
-const CORNER_RADIUS: i32 = 10;
-const PADDING_LEFT: i32 = 8;
-const PADDING_RIGHT: i32 = 8;
+const DOT_DIAMETER: i32 = 20;
+const DOT_SPACING: i32 = 26;
+const CORNER_RADIUS: i32 = 32;
+const PADDING_LEFT: i32 = 16;
+const PADDING_RIGHT: i32 = 16;
+const PADDING_VERTICAL: i32 = 7;
 const DEFAULT_ACCENT_COLOR: u32 = 0x007A7A7A;
+const ALWAYS_SHOW_WORKSPACES: u8 = 5; // Workspaces 1-5 always shown
 
 static STATUSBAR_CLASS: OnceLock<Result<(), String>> = OnceLock::new();
 const STATUSBAR_CLASS_NAME: PCWSTR = w!("MegaTileStatusBar");
@@ -55,6 +57,8 @@ struct StatusBarState {
     /// Cached time string for display.
     time_string: [u16; 16],
     time_string_len: usize,
+    /// Bitmask for workspaces 6-9 that have windows (bit 0 = ws6, bit 1 = ws7, etc)
+    occupied_workspaces_6_9: u8,
 }
 
 /// A floating status bar showing workspace indicators.
@@ -80,6 +84,7 @@ impl StatusBar {
             accent_color,
             time_string: [0u16; 16],
             time_string_len: 0,
+            occupied_workspaces_6_9: 0,
         });
         update_time_string(&mut state);
 
@@ -124,9 +129,20 @@ impl StatusBar {
     }
 
     /// Updates the workspace indicator display.
-    pub fn update_indicator(&mut self, active_workspace: u8, total_workspaces: u8) {
+    ///
+    /// # Arguments
+    /// * `active_workspace` - Currently active workspace (1-9)
+    /// * `total_workspaces` - Total number of workspaces (1-9)
+    /// * `occupied_6_9` - Bitmask for workspaces 6-9 occupancy (bit 0=ws6, bit 1=ws7, bit 2=ws8, bit 3=ws9)
+    pub fn update_indicator(
+        &mut self,
+        active_workspace: u8,
+        total_workspaces: u8,
+        occupied_6_9: u8,
+    ) {
         self.state.active_workspace = active_workspace.clamp(1, STATUSBAR_MAX_WORKSPACES);
         self.state.total_workspaces = total_workspaces.clamp(1, STATUSBAR_MAX_WORKSPACES);
+        self.state.occupied_workspaces_6_9 = occupied_6_9;
         if let Ok(color) = get_accent_color() {
             self.state.accent_color = color;
         }
@@ -319,8 +335,8 @@ unsafe fn draw_background(hdc: HDC, rect: &RECT, accent_color: u32) {
     unsafe {
         let brush = CreateSolidBrush(COLORREF(bg_color));
         // Use a slightly darker border
-        let border_color = darken_color(bg_color, 0.8);
-        let pen = CreatePen(PS_SOLID, 1, COLORREF(border_color));
+        let border_color = darken_color(bg_color, 0.85);
+        let pen = CreatePen(PS_SOLID, 2, COLORREF(border_color));
 
         let old_pen = SelectObject(hdc, pen.into());
         let old_brush = SelectObject(hdc, brush.into());
@@ -343,31 +359,50 @@ unsafe fn draw_background(hdc: HDC, rect: &RECT, accent_color: u32) {
 }
 
 unsafe fn draw_workspace_dots(hdc: HDC, rect: &RECT, state: &StatusBarState) {
-    let total = state.total_workspaces.min(STATUSBAR_MAX_WORKSPACES);
+    // Determine which workspaces to display
+    let mut workspaces_to_show = Vec::with_capacity(9);
 
-    // Start at far left with padding
+    // Always show workspaces 1-5
+    for i in 1..=ALWAYS_SHOW_WORKSPACES {
+        workspaces_to_show.push(i);
+    }
+
+    // Conditionally show workspaces 6-9 if they have windows
+    if state.occupied_workspaces_6_9 & 0x01 != 0 {
+        workspaces_to_show.push(6);
+    }
+    if state.occupied_workspaces_6_9 & 0x02 != 0 {
+        workspaces_to_show.push(7);
+    }
+    if state.occupied_workspaces_6_9 & 0x04 != 0 {
+        workspaces_to_show.push(8);
+    }
+    if state.occupied_workspaces_6_9 & 0x08 != 0 {
+        workspaces_to_show.push(9);
+    }
+
+    // Start at left with padding
     let start_x = rect.left + PADDING_LEFT;
-    let center_y = rect.top + (rect.bottom - rect.top - DOT_DIAMETER) / 2;
+    let center_y = rect.top + PADDING_VERTICAL;
 
     // Create font for workspace numbers
-    let font = create_small_font();
-    let old_font = SelectObject(hdc, font.into());
-    let _ = SetBkMode(hdc, TRANSPARENT);
+    let font = unsafe { create_small_font() };
+    let old_font = unsafe { SelectObject(hdc, font.into()) };
+    let _ = unsafe { SetBkMode(hdc, TRANSPARENT) };
 
-    for i in 0..total {
-        let workspace_id = i + 1;
-        let x = start_x + (i as i32) * DOT_SPACING;
-        let is_active = workspace_id == state.active_workspace;
+    for (index, workspace_id) in workspaces_to_show.iter().enumerate() {
+        let x = start_x + (index as i32) * DOT_SPACING;
+        let is_active = *workspace_id == state.active_workspace;
 
         // Draw the dot
         let (dot_color, text_color) = if is_active {
-            // Active: opaque accent color dot, white text
-            (state.accent_color, 0x00FFFFFF_u32)
+            // Active: opaque accent color dot, no text
+            (state.accent_color, state.accent_color)
         } else {
-            // Inactive: semi-transparent dot, dark text
+            // Inactive: semi-transparent dot, muted gray text
             (
                 semi_transparent_dot_color(state.accent_color),
-                0x00444444_u32,
+                0x00888888_u32,
             )
         };
 
@@ -384,18 +419,18 @@ unsafe fn draw_workspace_dots(hdc: HDC, rect: &RECT, state: &StatusBarState) {
             let _ = DeleteObject(pen.into());
             let _ = DeleteObject(brush.into());
 
-            // Draw the workspace number inside the dot
+            // Draw the workspace number inside the dot (centered)
             let _ = SetTextColor(hdc, COLORREF(text_color));
-            let num_char = [b'0' as u16 + workspace_id as u16];
+            let num_char = [b'0' as u16 + *workspace_id as u16];
             // Center the number in the dot
-            let text_x = x + (DOT_DIAMETER - 6) / 2;
-            let text_y = center_y + (DOT_DIAMETER - 10) / 2;
+            let text_x = x + (DOT_DIAMETER - 5) / 2;
+            let text_y = center_y + (DOT_DIAMETER - 14) / 2;
             let _ = TextOutW(hdc, text_x, text_y, &num_char);
         }
     }
 
-    SelectObject(hdc, old_font);
-    let _ = DeleteObject(font.into());
+    unsafe { SelectObject(hdc, old_font) };
+    let _ = unsafe { DeleteObject(font.into()) };
 }
 
 unsafe fn draw_time(hdc: HDC, rect: &RECT, state: &StatusBarState) {
@@ -404,42 +439,63 @@ unsafe fn draw_time(hdc: HDC, rect: &RECT, state: &StatusBarState) {
     }
 
     // Create font for time display
-    let font = create_small_font();
-    let old_font = SelectObject(hdc, font.into());
-    let _ = SetBkMode(hdc, TRANSPARENT);
-    // Use a light color for the time text
-    let _ = SetTextColor(hdc, COLORREF(0x00EEEEEE));
+    let font = unsafe { create_med_font() };
+    let old_font = unsafe { SelectObject(hdc, font.into()) };
+    let _ = unsafe { SetBkMode(hdc, TRANSPARENT) };
+    // Use a muted color for the time text (not bright white)
+    let _ = unsafe { SetTextColor(hdc, COLORREF(0x00AAAAAA)) };
 
     // Position time at far right
     let time_width = (state.time_string_len as i32) * 7; // Approximate character width
     let x = rect.right - PADDING_RIGHT - time_width;
-    let y = rect.top + (rect.bottom - rect.top - 12) / 2;
+    let y = rect.top + PADDING_VERTICAL + (DOT_DIAMETER - 22) / 2;
 
     unsafe {
         let _ = TextOutW(hdc, x, y, &state.time_string[..state.time_string_len]);
     }
 
-    SelectObject(hdc, old_font);
-    let _ = DeleteObject(font.into());
+    unsafe { SelectObject(hdc, old_font) };
+    let _ = unsafe { DeleteObject(font.into()) };
 }
 
 unsafe fn create_small_font() -> HFONT {
     unsafe {
         CreateFontW(
-            11,             // Height
-            0,              // Width (0 = auto)
-            0,              // Escapement
-            0,              // Orientation
-            400,            // Weight (400 = normal)
-            0,              // Italic
-            0,              // Underline
-            0,              // StrikeOut
-            0,              // CharSet
-            0,              // OutPrecision
-            0,              // ClipPrecision
-            0,              // Quality
-            0,              // PitchAndFamily
-            w!("Segoe UI"), // Face name
+            14,                                                      // Height (adjusted for better rendering)
+            0,                                                       // Width (0 = auto)
+            0,                                                       // Escapement
+            0,                                                       // Orientation
+            400,                                                     // Weight (400 = normal)
+            0,                                                       // Italic
+            0,                                                       // Underline
+            0,                                                       // StrikeOut
+            windows::Win32::Graphics::Gdi::FONT_CHARSET(0),          // CharSet
+            windows::Win32::Graphics::Gdi::FONT_OUTPUT_PRECISION(3), // OutPrecision (3 = TT_ONLY for smoother rendering)
+            windows::Win32::Graphics::Gdi::FONT_CLIP_PRECISION(0),   // ClipPrecision
+            windows::Win32::Graphics::Gdi::FONT_QUALITY(5), // Quality (5 = CLEARTYPE_QUALITY for smoother rendering)
+            0,                                              // PitchAndFamily
+            w!("Segoe UI"),                                 // Face name
+        )
+    }
+}
+
+unsafe fn create_med_font() -> HFONT {
+    unsafe {
+        CreateFontW(
+            20,                                                      // Height (adjusted for better rendering)
+            0,                                                       // Width (0 = auto)
+            0,                                                       // Escapement
+            0,                                                       // Orientation
+            400,                                                     // Weight (400 = normal)
+            0,                                                       // Italic
+            0,                                                       // Underline
+            0,                                                       // StrikeOut
+            windows::Win32::Graphics::Gdi::FONT_CHARSET(0),          // CharSet
+            windows::Win32::Graphics::Gdi::FONT_OUTPUT_PRECISION(3), // OutPrecision (3 = TT_ONLY for smoother rendering)
+            windows::Win32::Graphics::Gdi::FONT_CLIP_PRECISION(0),   // ClipPrecision
+            windows::Win32::Graphics::Gdi::FONT_QUALITY(5), // Quality (5 = CLEARTYPE_QUALITY for smoother rendering)
+            0,                                              // PitchAndFamily
+            w!("Segoe UI"),                                 // Face name
         )
     }
 }
@@ -453,7 +509,7 @@ fn dimmed_desaturated_background(accent_color: u32) -> u32 {
 
     // Blend towards gray (desaturate) and darken
     let desaturate_factor = 0.6_f32; // More desaturation
-    let darken_factor = 0.4_f32; // Significantly darken
+    let darken_factor = 0.35_f32; // Slightly darker
 
     let dr = blend_channel(r, gray, desaturate_factor);
     let dg = blend_channel(g, gray, desaturate_factor);
@@ -472,11 +528,11 @@ fn semi_transparent_dot_color(accent_color: u32) -> u32 {
     let (r, g, b) = split_color(accent_color);
 
     // Blend with a lighter gray to simulate transparency
-    let target = 180u8;
+    let target = 190u8;
     compose_color(
-        blend_channel(r, target, 0.3),
-        blend_channel(g, target, 0.3),
-        blend_channel(b, target, 0.3),
+        blend_channel(r, target, 0.25),
+        blend_channel(g, target, 0.25),
+        blend_channel(b, target, 0.25),
     )
 }
 

@@ -117,7 +117,7 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
         }
 
         // Verify the window handle is still valid
-        if !IsWindow(hwnd).as_bool() {
+        if !IsWindow(Some(hwnd)).as_bool() {
             println!("Filtered: invalid window handle");
             return false;
         }
@@ -204,7 +204,7 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
 
         // Filter owned windows (typically dialogs)
         let owner = GetWindow(hwnd, GW_OWNER);
-        if !owner.is_err() && !owner.unwrap().0.is_null() {
+        if owner.is_ok() && !owner.unwrap().0.is_null() {
             println!("Filtered: owned window (dialog)");
             return false;
         }

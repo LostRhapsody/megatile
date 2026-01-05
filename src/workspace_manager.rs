@@ -64,9 +64,15 @@ impl WorkspaceManager {
 
     /// Updates the status bar to reflect the current workspace.
     pub fn update_statusbar(&mut self) {
+        let workspace_num = self.active_workspace_global;
+        let mut occupied_6_9 = 0u8;
+        for ws in 6..=9 {
+            if self.get_workspace_window_count(ws) > 0 {
+                occupied_6_9 |= 1 << (ws - 6);
+            }
+        }
         if let Some(statusbar) = self.statusbar.as_mut() {
-            let workspace_num = self.active_workspace_global;
-            statusbar.update_indicator(workspace_num, STATUSBAR_MAX_WORKSPACES);
+            statusbar.update_indicator(workspace_num, STATUSBAR_MAX_WORKSPACES, occupied_6_9);
         }
     }
 
