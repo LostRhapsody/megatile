@@ -1,390 +1,429 @@
-# STEP 14: Multi-Monitor Support
+# STEP 16: Status Bar (Low Priority)
 
 ## Objective
 
-Enhance multi-monitor support to handle monitor hot-plug events and ensure independent tiling on each monitor within the same workspace.
+Implement a visual status bar to display the active workspace number, window count, and other useful information. This is a low-priority feature that enhances user experience.
 
 ## Tasks
 
-### 14.1 Add Monitor Hot-Plug Detection
+### 16.1 Create Status Bar Module
 
-Update `src/windows.rs`:
+Create `src/statusbar.rs`:
 
 ```rust
+use windows::Win32::Foundation::HWND;
+use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-pub fn register_display_change() {
-    unsafe {
-        // Register for display change notifications
-        // This will be used to re-enumerate monitors when configuration changes
-    }
+pub struct StatusBar {
+    hwnd: HWND,
+    parent_hwnd: HWND,
 }
 
-pub fn check_monitor_change() -> bool {
-    // Compare current monitor configuration with previous
-    // Return true if monitors changed
-    false // Placeholder
+impl StatusBar {
+    pub fn new(parent_hwnd: HWND) -> Result<Self, String> {
+        unsafe {
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!(""),
+                WS_CHILD | WS_VISIBLE | SS_CENTER,
+                0, 0, 0, 0,
+                parent_hwnd,
+                HMENU::default(),
+                GetModuleHandleW(None).unwrap(),
+                None,
+            );
+
+            if hwnd == HWND::default() {
+                return Err("Failed to create status bar window".to_string());
+            }
+
+            Ok(StatusBar { hwnd, parent_hwnd })
+        }
+    }
+
+    pub fn set_text(&self, text: &str) {
+        unsafe {
+            SetWindowTextW(self.hwnd, &text.encode_utf16().collect::<Vec<u16>>());
+        }
+    }
+
+    pub fn set_position(&self, x: i32, y: i32, width: i32, height: i32) {
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                HWND::default(),
+                x, y, width, height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    pub fn set_font(&self, hfont: HFONT) {
+        unsafe {
+            SendMessageW(self.hwnd, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
+        }
+    }
+
+    pub fn show(&self) {
+        unsafe {
+            ShowWindow(self.hwnd, SW_SHOW);
+        }
+    }
+
+    pub fn hide(&self) {
+        unsafe {
+            ShowWindow(self.hwnd, SW_HIDE);
+        }
+    }
+
+    pub fn update_workspace_info(&self, workspace_num: u8, window_count: usize) {
+        let text = format!("Workspace {} - {} Windows", workspace_num, window_count);
+        self.set_text(&text);
+    }
+
+    pub fn update_full_status(
+        &self,
+        workspace_num: u8,
+        window_count: usize,
+        tiling_algorithm: &str,
+    ) {
+        let text = format!(
+            "Workspace {} | {} Windows | {}",
+            workspace_num,
+            window_count,
+            tiling_algorithm
+        );
+        self.set_text(&text);
+    }
+
+    pub fn get_hwnd(&self) -> HWND {
+        self.hwnd
+    }
 }
 ```
 
-### 14.2 Add Monitor Re-enumeration
+### 16.2 Integrate Status Bar with Workspace Manager
 
 Update `src/workspace_manager.rs`:
 
 ```rust
+use crate::statusbar::StatusBar;
+
+pub struct WorkspaceManager {
+    monitors: Arc<Mutex<Vec<Monitor>>>,
+    active_workspace_global: u8,
+    tiler: Arc<Mutex<Tiler>>,
+    statusbar: Option<StatusBar>, // Add status bar
+}
+
 impl WorkspaceManager {
-    // ... existing methods ...
-
-    pub fn reenumerate_monitors(&mut self) -> Result<(), String> {
-        println!("Re-enumerating monitors...");
-
-        // Get current monitor info
-        let monitor_infos = windows::enumerate_monitors();
-        println!("Found {} monitor(s)", monitor_infos.len());
-
-        // Update monitors
-        let mut new_monitors: Vec<Monitor> = Vec::new();
-
-        for (i, info) in monitor_infos.iter().enumerate() {
-            println!("  Monitor {}: {:?}", i, info.rect);
-
-            // Try to preserve workspace data from existing monitor
-            let existing_workspace_data = if let Some(old_monitor) = self.get_monitors().get(i) {
-                old_monitor.workspaces.clone()
-            } else {
-                [
-                    Workspace::new(),
-                    Workspace::new(),
-                    Workspace::new(),
-                    Workspace::new(),
-                    Workspace::new(),
-                    Workspace::new(),
-                    Workspace::new(),
-                    Workspace::new(),
-                    Workspace::new(),
-                ]
-            };
-
-            let mut monitor = Monitor::new(info.hmonitor, info.rect);
-            monitor.workspaces = existing_workspace_data;
-            monitor.active_workspace = self.active_workspace_global;
-            new_monitors.push(monitor);
+    pub fn new() -> Self {
+        WorkspaceManager {
+            monitors: Arc::new(Mutex::new(Vec::new())),
+            active_workspace_global: 1,
+            tiler: Arc::new(Mutex::new(Tiler::default())),
+            statusbar: None, // Status bar created later
         }
+    }
 
-        // Update monitors
-        self.set_monitors(new_monitors);
+    pub fn set_statusbar(&mut self, statusbar: StatusBar) {
+        self.statusbar = Some(statusbar);
+    }
 
-        // Re-tile active workspace on all monitors
-        let mut wm = self.monitors.lock().unwrap();
-        wm.tile_active_workspaces();
-        wm.apply_window_positions();
+    pub fn update_statusbar(&self) {
+        if let Some(statusbar) = &self.statusbar {
+            let workspace_num = self.active_workspace_global;
+            let window_count = self.get_active_workspace_window_count();
+            let tiling_algorithm = format!("{:?}", self.get_tiling_algorithm());
 
-        println!("Monitor re-enumeration complete");
+            statusbar.update_full_status(
+                workspace_num,
+                window_count,
+                &tiling_algorithm,
+            );
+        }
+    }
+
+    // Update other methods to call update_statusbar()
+
+    pub fn switch_workspace_with_windows(&mut self, new_workspace: u8) -> Result<(), String> {
+        // ... existing code ...
+
+        // Update status bar
+        self.update_statusbar();
+
         Ok(())
     }
 
-    pub fn get_monitor_for_window(&self, hwnd: isize) -> Option<usize> {
-        let monitors = self.monitors.lock().unwrap();
+    pub fn toggle_tiling_algorithm(&self) -> TilingAlgorithm {
+        // ... existing code ...
 
-        for (i, monitor) in monitors.iter().enumerate() {
-            if let Some(workspace) = monitor.get_workspace(monitor.active_workspace) {
-                for window in &workspace.windows {
-                    if window.hwnd == hwnd {
-                        return Some(i);
-                    }
-                }
-            }
-        }
+        // Update status bar
+        self.update_statusbar();
 
-        None
+        new_algorithm
+    }
+
+    pub fn close_focused_window(&mut self) -> Result<(), String> {
+        // ... existing code ...
+
+        // Update status bar
+        self.update_statusbar();
+
+        Ok(())
     }
 }
 ```
 
-### 14.3 Improve Window-Monitor Assignment
+### 16.3 Create Status Bar Window
 
-Update `src/main.rs` to properly assign windows to monitors:
+Update `src/main.rs` to create status bar:
 
 ```rust
-use windows::Win32::Graphics::Gdi::MonitorFromWindow;
+use crate::statusbar::StatusBar;
 
-fn assign_window_to_monitor(hwnd: isize) -> usize {
-    unsafe {
-        let hmonitor = MonitorFromWindow(HWND(hwnd), MONITOR_DEFAULTTONEAREST);
-
-        let monitors = windows::enumerate_monitors();
-        for (i, monitor_info) in monitors.iter().enumerate() {
-            if monitor_info.hmonitor == hmonitor.0 {
-                return i;
-            }
-        }
-
-        // Default to monitor 0 if not found
-        0
-    }
+// Add this to main() before the event loop
+fn create_status_bar(parent_hwnd: HWND) -> Result<StatusBar, String> {
+    StatusBar::new(parent_hwnd)
 }
 
-// In main(), when enumerating windows
-for window_info in normal_windows {
-    let monitor_idx = assign_window_to_monitor(window_info.hwnd.0);
-    let mut window = workspace::Window::new(
-        window_info.hwnd,
-        1, // Workspace 1
-        monitor_idx,
-        window_info.rect,
+// In main(), after creating message window
+let statusbar = create_status_bar(hwnd)?;
+
+// Set status bar position and size (top center of primary monitor)
+let monitor_infos = windows::enumerate_monitors();
+if let Some(primary_monitor) = monitor_infos.first() {
+    let rect = primary_monitor.rect;
+    let statusbar_width = 400;
+    let statusbar_height = 30;
+    let x = rect.left + (rect.right - rect.left - statusbar_width) / 2;
+    let y = rect.top + 10;
+
+    statusbar.set_position(x, y, statusbar_width, statusbar_height);
+}
+
+// Set status bar to topmost
+unsafe {
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    SetWindowPos(
+        statusbar.get_hwnd(),
+        HWND_TOPMOST,
+        0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
     );
+}
 
-    // Set focus state
-    let focused_hwnd = unsafe { GetForegroundWindow() };
-    window.is_focused = window.hwnd == focused_hwnd;
+// Update workspace manager with status bar
+workspace_manager.lock().unwrap().set_statusbar(statusbar);
+```
 
-    wm.add_window(window);
+### 16.4 Add Hotkey to Toggle Status Bar
+
+Add hotkey to show/hide status bar:
+
+```rust
+// In src/hotkeys.rs, add new hotkey
+pub enum HotkeyAction {
+    // ... existing actions ...
+    ToggleStatusBar,
+}
+
+// Register Alt + B for status bar toggle
+(MOD_WIN, 0x42, 33, HotkeyAction::ToggleStatusBar), // B
+```
+
+```rust
+// In main.rs, store statusbar visibility state
+use std::sync::atomic::{AtomicBool, Ordering};
+
+let statusbar_visible = Arc::new(AtomicBool::new(true));
+
+// In hotkey handler
+hotkeys::HotkeyAction::ToggleStatusBar => {
+    let mut visible = statusbar_visible.load(Ordering::SeqCst);
+    visible = !visible;
+    statusbar_visible.store(visible, Ordering::SeqCst);
+
+    if visible {
+        statusbar.show();
+    } else {
+        statusbar.hide();
+    }
+
+    println!("Status bar: {}", if visible { "visible" } else { "hidden" });
 }
 ```
 
-### 14.4 Add Periodic Monitor Check
+### 16.5 Add Styling
 
-Update `src/main.rs`:
+Make status bar more visually appealing:
 
 ```rust
-fn main() {
-    // ... existing setup ...
+// In src/main.rs, create a custom font
+fn create_statusbar_font() -> Result<HFONT, String> {
+    unsafe {
+        let font = CreateFontW(
+            20, // Height
+            0,  // Width
+            0,  // Escapement
+            0,  // Orientation
+            FW_NORMAL, // Weight
+            0,  // Italic
+            0,  // Underline
+            0,  // StrikeOut
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_DONTCARE,
+            w!("Segoe UI"),
+        );
 
-    // Last monitor check time
-    let mut last_monitor_check = std::time::Instant::now();
-    const MONITOR_CHECK_INTERVAL: Duration = Duration::from_secs(5);
-
-    // Main event loop
-    loop {
-        if tray.should_exit() {
-            println!("Exiting MegaTile...");
-            hotkey_manager.unregister_all(hwnd);
-            break;
+        if font.is_invalid() {
+            return Err("Failed to create font".to_string());
         }
 
-        // Check for monitor changes periodically
-        if last_monitor_check.elapsed() >= MONITOR_CHECK_INTERVAL {
-            // TODO: Implement proper monitor change detection
-            // For now, just print that we're checking
-            last_monitor_check = std::time::Instant::now();
-        }
-
-        // Process window messages
-        let mut msg = MSG::default();
-        while unsafe { PeekMessageW(&mut msg, HWND::default(), 0, 0, PM_REMOVE) }.as_bool() {
-            unsafe {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-
-                if msg.message == WM_HOTKEY {
-                    let action = hotkey_manager.get_action(msg.wParam.0 as i32);
-                    if let Some(action) = action {
-                        handle_hotkey(action, &workspace_manager);
-                    }
-                } else if msg.message == WM_DISPLAYCHANGE {
-                    // Display configuration changed
-                    println!("Display configuration changed");
-                    let mut wm = workspace_manager.lock().unwrap();
-                    let _ = wm.reenumerate_monitors();
-                } else if msg.message == WM_DESTROY {
-                    PostQuitMessage(0);
-                }
-            }
-        }
-
-        std::thread::sleep(Duration::from_millis(10));
+        Ok(font)
     }
 }
-```
 
-### 14.5 Add Cross-Monitor Focus Movement
-
-Update `src/workspace_manager.rs`:
-
-```rust
-impl WorkspaceManager {
-    // ... existing methods ...
-
-    pub fn move_focus_cross_monitor(&self, direction: FocusDirection) -> Result<(), String> {
-        use windows::Win32::UI::WindowsAndMessaging::*;
-
-        let focused = self.get_focused_window();
-
-        if focused.is_none() {
-            return Ok(()); // No window focused
-        }
-
-        let focused_window = focused.unwrap();
-        let current_monitor_idx = focused_window.monitor;
-
-        let monitors = self.monitors.lock().unwrap();
-        let current_monitor = monitors.get(current_monitor_idx);
-
-        if current_monitor.is_none() {
-            return Err("Current monitor not found".to_string());
-        }
-
-        let current_monitor_rect = current_monitor.unwrap().rect;
-
-        // Try to find window in current monitor first
-        let mut active_windows: Vec<Window> = Vec::new();
-        for monitor in monitors.iter() {
-            let active_workspace = monitor.get_active_workspace();
-            for window in &active_workspace.windows {
-                active_windows.push(window.clone());
-            }
-        }
-
-        // Find candidate windows in direction
-        let target = self.find_next_focus(&focused_window, direction, &active_windows);
-
-        if let Some(target_window) = target {
-            // Check if target is on different monitor
-            if target_window.monitor != current_monitor_idx {
-                println!("Moving focus to different monitor: {} -> {}",
-                         current_monitor_idx, target_window.monitor);
-            }
-
-            self.set_window_focus(target_window.hwnd);
-        }
-
-        Ok(())
-    }
-}
-```
-
-### 14.6 Update Focus Movement to Use Cross-Monitor
-
-Update hotkey handler in `src/main.rs`:
-
-```rust
-hotkeys::HotkeyAction::FocusLeft => {
-    let wm = workspace_manager.lock().unwrap();
-    let _ = wm.move_focus_cross_monitor(workspace_manager::FocusDirection::Left);
-}
-hotkeys::HotkeyAction::FocusRight => {
-    let wm = workspace_manager.lock().unwrap();
-    let _ = wm.move_focus_cross_monitor(workspace_manager::FocusDirection::Right);
-}
-hotkeys::HotkeyAction::FocusUp => {
-    let wm = workspace_manager.lock().unwrap();
-    let _ = wm.move_focus_cross_monitor(workspace_manager::FocusDirection::Up);
-}
-hotkeys::HotkeyAction::FocusDown => {
-    let wm = workspace_manager.lock().unwrap();
-    let _ = wm.move_focus_cross_monitor(workspace_manager::FocusDirection::Down);
-}
+// Apply font to status bar
+let font = create_statusbar_font()?;
+statusbar.set_font(font);
 ```
 
 ## Testing
 
-1. Run the application with multiple monitors
-2. Open applications on different monitors
-3. Verify windows are assigned to correct monitors
-4. Press Win + Right Arrow to move focus to right monitor
-5. Verify focus moves correctly between monitors
-6. Disconnect a monitor
-7. Verify application handles monitor change (WM_DISPLAYCHANGE)
-8. Reconnect monitor
-9. Verify windows are re-tiled correctly
+1. Run the application
+2. Verify status bar appears at top center of screen
+3. Open applications and verify status bar shows window count
+4. Switch workspaces and verify workspace number updates
+5. Press Alt + B to toggle status bar visibility
+6. Verify status bar hides/shows correctly
+7. Toggle tiling algorithm and verify status bar updates
 
 ## Success Criteria
 
-- [ ] Windows are correctly assigned to their monitors
-- [ ] Focus movement works across monitors
-- [ ] Monitor hot-plug events are detected
-- [ ] Workspace data is preserved on monitor change
-- [ ] Windows re-tile correctly on monitor configuration change
-- [ ] Each monitor has independent tiling within same workspace
+- [ ] Status bar displays at top center of screen
+- [ ] Shows current workspace number
+- [ ] Shows window count
+- [ ] Shows tiling algorithm
+- [ ] Updates when workspace changes
+- [ ] Updates when window count changes
+- [ ] Can be toggled with Alt + B
+- [ ] Has proper styling and font
 
 ## Documentation
 
-### Multi-Monitor Architecture
+### Status Bar Design
 
-**Shared workspace model**:
-- All monitors share same active workspace number
-- Each monitor maintains independent window lists for each workspace
-- Workspace 1 on Monitor A ≠ Workspace 1 on Monitor B
-- Switching workspace affects all monitors simultaneously
+**Position**: Top center of primary monitor
+**Size**: 400px width, 30px height
+**Style**: Centered text, Segoe UI font, 20px height
+**Z-order**: Topmost (visible above all windows)
 
-**Independent tiling**:
-- Each monitor tiles its own windows independently
-- Different monitors can have different numbers of windows
-- Window gaps apply per-monitor
-- Tiling algorithm is global but applied per-monitor
+### Status Bar Content
 
-### Monitor Assignment
+**Format**: `Workspace N | X Windows | Algorithm`
+- N: Current workspace number (1-9)
+- X: Number of windows in active workspace
+- Algorithm: Current tiling algorithm name
 
-**Window to monitor mapping**:
-- Uses `MonitorFromWindow()` API to find window's monitor
-- Updated when windows are added or moved
-- Tracked in `Window.monitor` field
+**Update triggers**:
+- Workspace switch
+- Window added/closed
+- Algorithm toggle
+- Window moved to/from workspace
 
-**Monitor enumeration**:
-- Uses `EnumDisplayMonitors()` API
-- Captures monitor handle and rectangle
-- Detects primary monitor flag
+### Status Bar Features
 
-### Monitor Hot-Plug Handling
+**Visibility toggle**:
+- Alt + B: Show/hide status bar
+- Preserves state across workspace switches
+- Updates when visible
 
-**Display change detection**:
-- `WM_DISPLAYCHANGE` message in window message loop
-- Triggers monitor re-enumeration
-- Preserves existing workspace data
+**Styling**:
+- ClearType quality font rendering
+- Segoe UI (Windows system font)
+- Topmost z-order for visibility
 
-**Re-enumeration process**:
-1. Get new monitor list
-2. Match with existing monitors by index
-3. Preserve workspace data where possible
-4. Create new monitor structs for new monitors
-5. Re-tile all active workspaces
+### Status Bar Implementation
 
-**Edge cases**:
-- Monitor disconnect: Windows on disconnected monitor need reassignment
-- Monitor addition: New monitor is empty
-- Resolution change: Windows may need repositioning
-- DPI change: Not currently handled
+**Window type**: STATIC control (text display)
+**Parent**: Message-only window (for message handling)
+**Messages**: WM_SETFONT for custom font
+**Text updates**: SetWindowTextW API
 
-### Cross-Monitor Focus Movement
+### Performance Considerations
 
-**Algorithm**:
-1. Get currently focused window and its monitor
-2. Search for windows in specified direction across ALL monitors
-3. Select closest window in that direction
-4. Move focus to target window
+**Update frequency**:
+- Only updates when data changes
+- Not on every frame or tick
+- Minimizes redraws
 
-**Direction selection**:
-- Left/Right: Uses horizontal position
-- Up/Down: Uses vertical position
-- Considers all active workspace windows on all monitors
-
-### Workspace Synchronization
-
-**All monitors, one workspace**:
-- Win + 1 shows workspace 1 on ALL monitors
-- Each monitor shows its own windows in workspace 1
-- Switching workspace updates all monitors simultaneously
-
-**Per-monitor window lists**:
-- Monitor 0: Workspace 1 has [Window A, Window B]
-- Monitor 1: Workspace 1 has [Window C, Window D, Window E]
-- Both are workspace 1 but have different content
+**Rendering**:
+- Static control handles rendering
+- No custom drawing needed
+- Efficient for simple text display
 
 ### Limitations
 
-- No per-monitor workspace selection
-- Monitor DPI changes not handled
-- Window reassignment on disconnect may fail
-- Monitor ordering may change on reconnection
+- Single status bar (per primary monitor only)
+- Fixed position (top center)
+- Fixed size (400x30)
+- No custom positioning
+- No configuration options
 
 ### Future Enhancements
 
-1. **Per-monitor workspaces**: Independent workspace per monitor
-2. **Monitor-specific gaps**: Different gaps per monitor
-3. **DPI awareness**: Handle DPI scaling changes
-4. **Window reassignment**: Smart reassignment on monitor disconnect
-5. **Monitor profiles**: Save/restore monitor configurations
+1. **Per-monitor status bars**: One per monitor
+2. **Customizable position**: User-defined position
+3. **Configurable content**: Toggle info fields
+4. **Custom colors/themes**: Match system theme
+5. **More information**: Battery, time, etc.
+6. **Interactive elements**: Click to cycle workspaces
+7. **Resizable/draggable**: Full window manager for status bar
+
+### Integration with Other Features
+
+**Workspace switching**: Updates workspace number and window count
+**Window operations**: Updates window count when windows are closed
+**Algorithm toggle**: Updates algorithm name
+**Multi-monitor**: Currently only on primary monitor
+
+### MVP Completion
+
+This step completes the MVP for MegaTile! All core features are now implemented:
+- ✅ Window enumeration and filtering
+- ✅ System tray integration
+- ✅ Global hotkey registration
+- ✅ Workspace management
+- ✅ Window hiding/showing
+- ✅ Dwindle tiling algorithm
+- ✅ Focus movement
+- ✅ Window movement
+- ✅ Workspace switching
+- ✅ Move windows to workspaces
+- ✅ Window closing
+- ✅ Toggle tiling algorithm
+- ✅ Toggle fullscreen
+- ✅ Multi-monitor support
+- ✅ Auto-start configuration
+- ✅ Status bar
 
 ## Next Steps
 
-Proceed to [STEP_15.md](STEP_15.md) to implement auto-start configuration.
+The MVP is complete! Future work could include:
+- Additional tiling algorithms (Spiral, Stack, Column)
+- Window gaps adjustment
+- Status bar customization
+- Window event hooks for automatic cleanup
+- Per-monitor workspace selection
+- Configuration file support
+- Visual indicators (workspace numbers, window borders)
+- Scratchpad workspace
+- Floating window mode
+
+These can be implemented as needed based on user feedback.

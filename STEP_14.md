@@ -1,97 +1,33 @@
-# STEP 13: Toggle Fullscreen (Win + F)
+# STEP 14: Multi-Monitor Support
 
 ## Objective
 
-Implement fullscreen toggle functionality to switch the focused window between tiled and fullscreen mode.
+Enhance multi-monitor support to handle monitor hot-plug events and ensure independent tiling on each monitor within the same workspace.
 
 ## Tasks
 
-### 13.1 Add Fullscreen State to Window
-
-Update `src/workspace.rs`:
-
-```rust
-#[derive(Debug, Clone)]
-pub struct Window {
-    pub hwnd: HWND,
-    pub title: String,
-    pub workspace: u8,
-    pub monitor: usize,
-    pub rect: RECT,
-    pub is_focused: bool,
-    pub original_rect: RECT,
-    pub is_fullscreen: bool,  // Add fullscreen state
-}
-```
-
-### 13.2 Add Fullscreen Functions
+### 14.1 Add Monitor Hot-Plug Detection
 
 Update `src/windows.rs`:
 
 ```rust
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-pub fn set_window_fullscreen(hwnd: HWND, monitor_rect: RECT) -> Result<(), String> {
+pub fn register_display_change() {
     unsafe {
-        // Store original placement
-        let mut placement = WINDOWPLACEMENT {
-            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-            ..Default::default()
-        };
-
-        if GetWindowPlacement(hwnd, &mut placement).as_bool() {
-            // Set window to fullscreen
-            SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                monitor_rect.left,
-                monitor_rect.top,
-                monitor_rect.right - monitor_rect.left,
-                monitor_rect.bottom - monitor_rect.top,
-                SWP_SHOWWINDOW | SWP_NOZORDER,
-            ).ok();
-        }
-
-        Ok(())
+        // Register for display change notifications
+        // This will be used to re-enumerate monitors when configuration changes
     }
 }
 
-pub fn restore_window_from_fullscreen(hwnd: HWND, original_rect: RECT) -> Result<(), String> {
-    unsafe {
-        // Restore original position and size
-        SetWindowPos(
-            hwnd,
-            HWND::default(),
-            original_rect.left,
-            original_rect.top,
-            original_rect.right - original_rect.left,
-            original_rect.bottom - original_rect.top,
-            SWP_SHOWWINDOW | SWP_NOZORDER | SWP_NOACTIVATE,
-        ).ok();
-
-        Ok(())
-    }
-}
-
-pub fn get_monitor_rect(hwnd: HWND) -> Option<RECT> {
-    unsafe {
-        let mut monitor_info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-
-        let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-
-        if GetMonitorInfoW(hmonitor, &mut monitor_info).as_bool() {
-            Some(monitor_info.rcMonitor)
-        } else {
-            None
-        }
-    }
+pub fn check_monitor_change() -> bool {
+    // Compare current monitor configuration with previous
+    // Return true if monitors changed
+    false // Placeholder
 }
 ```
 
-### 13.3 Add Fullscreen Toggle to Workspace Manager
+### 14.2 Add Monitor Re-enumeration
 
 Update `src/workspace_manager.rs`:
 
@@ -99,278 +35,356 @@ Update `src/workspace_manager.rs`:
 impl WorkspaceManager {
     // ... existing methods ...
 
-    pub fn toggle_fullscreen(&mut self) -> Result<(), String> {
-        // Get currently focused window
-        let focused = self.get_focused_window();
+    pub fn reenumerate_monitors(&mut self) -> Result<(), String> {
+        println!("Re-enumerating monitors...");
 
-        if focused.is_none() {
-            return Err("No focused window".to_string());
+        // Get current monitor info
+        let monitor_infos = windows::enumerate_monitors();
+        println!("Found {} monitor(s)", monitor_infos.len());
+
+        // Update monitors
+        let mut new_monitors: Vec<Monitor> = Vec::new();
+
+        for (i, info) in monitor_infos.iter().enumerate() {
+            println!("  Monitor {}: {:?}", i, info.rect);
+
+            // Try to preserve workspace data from existing monitor
+            let existing_workspace_data = if let Some(old_monitor) = self.get_monitors().get(i) {
+                old_monitor.workspaces.clone()
+            } else {
+                [
+                    Workspace::new(),
+                    Workspace::new(),
+                    Workspace::new(),
+                    Workspace::new(),
+                    Workspace::new(),
+                    Workspace::new(),
+                    Workspace::new(),
+                    Workspace::new(),
+                    Workspace::new(),
+                ]
+            };
+
+            let mut monitor = Monitor::new(info.hmonitor, info.rect);
+            monitor.workspaces = existing_workspace_data;
+            monitor.active_workspace = self.active_workspace_global;
+            new_monitors.push(monitor);
         }
 
-        let focused_hwnd = focused.unwrap().hwnd;
+        // Update monitors
+        self.set_monitors(new_monitors);
 
-        // Find and update the window in workspace
-        let mut monitors = self.monitors.lock().unwrap();
+        // Re-tile active workspace on all monitors
+        let mut wm = self.monitors.lock().unwrap();
+        wm.tile_active_workspaces();
+        wm.apply_window_positions();
 
-        for monitor in monitors.iter_mut() {
-            let active_workspace_idx = (monitor.active_workspace - 1) as usize;
-            if let Some(workspace) = monitor.get_workspace_mut((monitor.active_workspace)) {
-                if let Some(window) = workspace.get_window_mut(focused_hwnd) {
-                    let monitor_rect = monitor.rect;
-
-                    if window.is_fullscreen {
-                        // Restore from fullscreen
-                        println!("Restoring window {:?} from fullscreen", focused_hwnd);
-                        crate::windows::restore_window_from_fullscreen(
-                            focused_hwnd,
-                            window.original_rect
-                        )?;
-                        window.is_fullscreen = false;
-                    } else {
-                        // Set to fullscreen
-                        println!("Setting window {:?} to fullscreen", focused_hwnd);
-                        window.original_rect = window.rect; // Store current position
-                        crate::windows::set_window_fullscreen(focused_hwnd, monitor_rect)?;
-                        window.is_fullscreen = true;
-                    }
-
-                    return Ok(());
-                }
-            }
-        }
-
-        Err("Window not found".to_string())
+        println!("Monitor re-enumeration complete");
+        Ok(())
     }
 
-    pub fn exit_fullscreen_all(&mut self) {
-        let mut monitors = self.monitors.lock().unwrap();
+    pub fn get_monitor_for_window(&self, hwnd: isize) -> Option<usize> {
+        let monitors = self.monitors.lock().unwrap();
 
-        for monitor in monitors.iter_mut() {
-            for workspace in &mut monitor.workspaces {
-                for window in &mut workspace.windows {
-                    if window.is_fullscreen {
-                        crate::windows::restore_window_from_fullscreen(
-                            window.hwnd,
-                            window.original_rect
-                        ).ok();
-                        window.is_fullscreen = false;
+        for (i, monitor) in monitors.iter().enumerate() {
+            if let Some(workspace) = monitor.get_workspace(monitor.active_workspace) {
+                for window in &workspace.windows {
+                    if window.hwnd == hwnd {
+                        return Some(i);
                     }
                 }
             }
         }
+
+        None
     }
 }
 ```
 
-### 13.4 Update Hotkey Handler
+### 14.3 Improve Window-Monitor Assignment
+
+Update `src/main.rs` to properly assign windows to monitors:
+
+```rust
+use windows::Win32::Graphics::Gdi::MonitorFromWindow;
+
+fn assign_window_to_monitor(hwnd: isize) -> usize {
+    unsafe {
+        let hmonitor = MonitorFromWindow(HWND(hwnd), MONITOR_DEFAULTTONEAREST);
+
+        let monitors = windows::enumerate_monitors();
+        for (i, monitor_info) in monitors.iter().enumerate() {
+            if monitor_info.hmonitor == hmonitor.0 {
+                return i;
+            }
+        }
+
+        // Default to monitor 0 if not found
+        0
+    }
+}
+
+// In main(), when enumerating windows
+for window_info in normal_windows {
+    let monitor_idx = assign_window_to_monitor(window_info.hwnd.0);
+    let mut window = workspace::Window::new(
+        window_info.hwnd,
+        1, // Workspace 1
+        monitor_idx,
+        window_info.rect,
+    );
+
+    // Set focus state
+    let focused_hwnd = unsafe { GetForegroundWindow() };
+    window.is_focused = window.hwnd == focused_hwnd;
+
+    wm.add_window(window);
+}
+```
+
+### 14.4 Add Periodic Monitor Check
 
 Update `src/main.rs`:
 
 ```rust
-fn handle_hotkey(action: hotkeys::HotkeyAction, workspace_manager: &Arc<Mutex<WorkspaceManager>>) {
-    match action {
-        hotkeys::HotkeyAction::SwitchWorkspace(num) => {
-            let mut wm = workspace_manager.lock().unwrap();
-            match wm.switch_workspace_with_windows(num) {
-                Ok(()) => {
-                    let window_count = wm.get_active_workspace_window_count();
-                    println!("Switched to workspace {} ({} windows)", num, window_count);
+fn main() {
+    // ... existing setup ...
+
+    // Last monitor check time
+    let mut last_monitor_check = std::time::Instant::now();
+    const MONITOR_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+
+    // Main event loop
+    loop {
+        if tray.should_exit() {
+            println!("Exiting MegaTile...");
+            hotkey_manager.unregister_all(hwnd);
+            break;
+        }
+
+        // Check for monitor changes periodically
+        if last_monitor_check.elapsed() >= MONITOR_CHECK_INTERVAL {
+            // TODO: Implement proper monitor change detection
+            // For now, just print that we're checking
+            last_monitor_check = std::time::Instant::now();
+        }
+
+        // Process window messages
+        let mut msg = MSG::default();
+        while unsafe { PeekMessageW(&mut msg, HWND::default(), 0, 0, PM_REMOVE) }.as_bool() {
+            unsafe {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+
+                if msg.message == WM_HOTKEY {
+                    let action = hotkey_manager.get_action(msg.wParam.0 as i32);
+                    if let Some(action) = action {
+                        handle_hotkey(action, &workspace_manager);
+                    }
+                } else if msg.message == WM_DISPLAYCHANGE {
+                    // Display configuration changed
+                    println!("Display configuration changed");
+                    let mut wm = workspace_manager.lock().unwrap();
+                    let _ = wm.reenumerate_monitors();
+                } else if msg.message == WM_DESTROY {
+                    PostQuitMessage(0);
                 }
-                Err(e) => eprintln!("Failed to switch workspace: {}", e),
             }
         }
-        hotkeys::HotkeyAction::MoveToWorkspace(num) => {
-            let mut wm = workspace_manager.lock().unwrap();
-            match wm.move_window_to_workspace(num) {
-                Ok(()) => {
-                    println!("Moved window to workspace {}", num);
-                    wm.print_workspace_status();
-                }
-                Err(e) => eprintln!("Failed to move window: {}", e),
-            }
-        }
-        hotkeys::HotkeyAction::CloseWindow => {
-            let mut wm = workspace_manager.lock().unwrap();
-            match wm.close_focused_window() {
-                Ok(()) => println!("Window closed successfully"),
-                Err(e) => eprintln!("Failed to close window: {}", e),
-            }
-        }
-        hotkeys::HotkeyAction::ToggleTiling => {
-            let wm = workspace_manager.lock().unwrap();
-            let algorithm = wm.toggle_tiling_algorithm();
-            println!("Now using {:?} tiling", algorithm);
-        }
-        hotkeys::HotkeyAction::ToggleFullscreen => {
-            let mut wm = workspace_manager.lock().unwrap();
-            match wm.toggle_fullscreen() {
-                Ok(()) => println!("Fullscreen toggled"),
-                Err(e) => eprintln!("Failed to toggle fullscreen: {}", e),
-            }
-        }
-        // ... other actions ...
+
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 ```
 
-### 13.5 Handle Fullscreen on Workspace Switch
+### 14.5 Add Cross-Monitor Focus Movement
 
 Update `src/workspace_manager.rs`:
 
 ```rust
 impl WorkspaceManager {
-    pub fn switch_workspace_with_windows(&mut self, new_workspace: u8) -> Result<(), String> {
-        if new_workspace < 1 || new_workspace > 9 {
-            return Err("Invalid workspace number".to_string());
+    // ... existing methods ...
+
+    pub fn move_focus_cross_monitor(&self, direction: FocusDirection) -> Result<(), String> {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+
+        let focused = self.get_focused_window();
+
+        if focused.is_none() {
+            return Ok(()); // No window focused
         }
 
-        let old_workspace = self.active_workspace_global;
+        let focused_window = focused.unwrap();
+        let current_monitor_idx = focused_window.monitor;
 
-        if old_workspace == new_workspace {
-            return Ok(()); // No change needed
+        let monitors = self.monitors.lock().unwrap();
+        let current_monitor = monitors.get(current_monitor_idx);
+
+        if current_monitor.is_none() {
+            return Err("Current monitor not found".to_string());
         }
 
-        println!("Switching from workspace {} to {}", old_workspace, new_workspace);
+        let current_monitor_rect = current_monitor.unwrap().rect;
 
-        // Exit fullscreen on all windows in old workspace
-        self.exit_fullscreen_workspace(old_workspace);
-
-        // Hide windows from old workspace
-        self.hide_workspace_windows(old_workspace)?;
-
-        // Show windows from new workspace
-        self.show_workspace_windows(new_workspace)?;
-
-        // Update active workspace
-        self.active_workspace_global = new_workspace;
-
-        // Update all monitors
-        let mut monitors = self.monitors.lock().unwrap();
-        for monitor in monitors.iter_mut() {
-            monitor.set_active_workspace(new_workspace);
+        // Try to find window in current monitor first
+        let mut active_windows: Vec<Window> = Vec::new();
+        for monitor in monitors.iter() {
+            let active_workspace = monitor.get_active_workspace();
+            for window in &active_workspace.windows {
+                active_windows.push(window.clone());
+            }
         }
 
-        // Tile and position windows in new workspace
-        drop(monitors);
-        let mut wm = self.monitors.lock().unwrap();
-        wm.tile_active_workspaces();
-        wm.apply_window_positions();
+        // Find candidate windows in direction
+        let target = self.find_next_focus(&focused_window, direction, &active_windows);
+
+        if let Some(target_window) = target {
+            // Check if target is on different monitor
+            if target_window.monitor != current_monitor_idx {
+                println!("Moving focus to different monitor: {} -> {}",
+                         current_monitor_idx, target_window.monitor);
+            }
+
+            self.set_window_focus(target_window.hwnd);
+        }
 
         Ok(())
     }
+}
+```
 
-    fn exit_fullscreen_workspace(&self, workspace_num: u8) {
-        let mut monitors = self.monitors.lock().unwrap();
+### 14.6 Update Focus Movement to Use Cross-Monitor
 
-        for monitor in monitors.iter_mut() {
-            if let Some(workspace) = monitor.get_workspace_mut(workspace_num) {
-                for window in &mut workspace.windows {
-                    if window.is_fullscreen {
-                        crate::windows::restore_window_from_fullscreen(
-                            window.hwnd,
-                            window.original_rect
-                        ).ok();
-                        window.is_fullscreen = false;
-                    }
-                }
-            }
-        }
-    }
+Update hotkey handler in `src/main.rs`:
+
+```rust
+hotkeys::HotkeyAction::FocusLeft => {
+    let wm = workspace_manager.lock().unwrap();
+    let _ = wm.move_focus_cross_monitor(workspace_manager::FocusDirection::Left);
+}
+hotkeys::HotkeyAction::FocusRight => {
+    let wm = workspace_manager.lock().unwrap();
+    let _ = wm.move_focus_cross_monitor(workspace_manager::FocusDirection::Right);
+}
+hotkeys::HotkeyAction::FocusUp => {
+    let wm = workspace_manager.lock().unwrap();
+    let _ = wm.move_focus_cross_monitor(workspace_manager::FocusDirection::Up);
+}
+hotkeys::HotkeyAction::FocusDown => {
+    let wm = workspace_manager.lock().unwrap();
+    let _ = wm.move_focus_cross_monitor(workspace_manager::FocusDirection::Down);
 }
 ```
 
 ## Testing
 
-1. Run the application
-2. Open multiple applications
-3. Focus one window
-4. Press Win + F to toggle fullscreen
-5. Verify:
-   - Window expands to fill entire monitor
-   - Console logs fullscreen activation
-6. Press Win + F again
-7. Verify:
-   - Window returns to tiled position
-   - Window is properly tiled with other windows
-8. Switch workspaces while window is fullscreen
-9. Verify:
-   - Window exits fullscreen before hiding
-   - Window appears in tiled state when switching back
+1. Run the application with multiple monitors
+2. Open applications on different monitors
+3. Verify windows are assigned to correct monitors
+4. Press Alt + Right Arrow to move focus to right monitor
+5. Verify focus moves correctly between monitors
+6. Disconnect a monitor
+7. Verify application handles monitor change (WM_DISPLAYCHANGE)
+8. Reconnect monitor
+9. Verify windows are re-tiled correctly
 
 ## Success Criteria
 
-- [ ] Win + F toggles fullscreen on focused window
-- [ ] Window expands to fill entire monitor
-- [ ] Window restores to tiled position
-- [ ] Tiling is maintained after restoring from fullscreen
-- [ ] Fullscreen windows exit fullscreen on workspace switch
-- [ ] Console logs fullscreen state changes
+- [ ] Windows are correctly assigned to their monitors
+- [ ] Focus movement works across monitors
+- [ ] Monitor hot-plug events are detected
+- [ ] Workspace data is preserved on monitor change
+- [ ] Windows re-tile correctly on monitor configuration change
+- [ ] Each monitor has independent tiling within same workspace
 
 ## Documentation
 
-### Fullscreen Toggle Flow
+### Multi-Monitor Architecture
 
-**Enter fullscreen**:
-1. Get focused window
-2. Store current position in `original_rect`
-3. Get monitor rectangle
-4. Set window to monitor rectangle size
-5. Set `is_fullscreen = true`
+**Shared workspace model**:
+- All monitors share same active workspace number
+- Each monitor maintains independent window lists for each workspace
+- Workspace 1 on Monitor A ≠ Workspace 1 on Monitor B
+- Switching workspace affects all monitors simultaneously
 
-**Exit fullscreen**:
-1. Get focused window
-2. Restore `original_rect` position
-3. Set `is_fullscreen = false`
+**Independent tiling**:
+- Each monitor tiles its own windows independently
+- Different monitors can have different numbers of windows
+- Window gaps apply per-monitor
+- Tiling algorithm is global but applied per-monitor
 
-**Switch workspace**:
-1. Exit fullscreen on all windows in old workspace
-2. Hide/show windows as normal
-3. Windows appear in tiled state in new workspace
+### Monitor Assignment
 
-### Fullscreen Implementation
+**Window to monitor mapping**:
+- Uses `MonitorFromWindow()` API to find window's monitor
+- Updated when windows are added or moved
+- Tracked in `Window.monitor` field
 
-**API used**:
-- `SetWindowPos` with monitor rect
-- `HWND_TOPMOST` for z-order (can be adjusted)
-- `SWP_SHOWWINDOW` flag
+**Monitor enumeration**:
+- Uses `EnumDisplayMonitors()` API
+- Captures monitor handle and rectangle
+- Detects primary monitor flag
 
-**Positioning**:
-- Fullscreen: `monitor_rect` (entire monitor)
-- Tiled: `original_rect` (saved tiled position)
+### Monitor Hot-Plug Handling
 
-### Edge Cases
+**Display change detection**:
+- `WM_DISPLAYCHANGE` message in window message loop
+- Triggers monitor re-enumeration
+- Preserves existing workspace data
 
-**Multiple fullscreen windows**:
-- Only one window can be truly fullscreen at a time
-- Other fullscreen windows should be restored when switching focus
+**Re-enumeration process**:
+1. Get new monitor list
+2. Match with existing monitors by index
+3. Preserve workspace data where possible
+4. Create new monitor structs for new monitors
+5. Re-tile all active workspaces
 
-**Fullscreen on workspace switch**:
-- All fullscreen windows in old workspace are restored
-- Prevents windows from being hidden while fullscreen
-- Ensures clean state when returning
+**Edge cases**:
+- Monitor disconnect: Windows on disconnected monitor need reassignment
+- Monitor addition: New monitor is empty
+- Resolution change: Windows may need repositioning
+- DPI change: Not currently handled
 
-**Monitor configuration changes**:
-- Fullscreen windows may need to be repositioned
-- Monitor disconnection not currently handled
+### Cross-Monitor Focus Movement
 
-### Window Behavior
+**Algorithm**:
+1. Get currently focused window and its monitor
+2. Search for windows in specified direction across ALL monitors
+3. Select closest window in that direction
+4. Move focus to target window
 
-**Supported**:
-- Most standard applications
-- Applications that respond to `SetWindowPos`
+**Direction selection**:
+- Left/Right: Uses horizontal position
+- Up/Down: Uses vertical position
+- Considers all active workspace windows on all monitors
 
-**Potential issues**:
-- Apps with own fullscreen mode (games, video players)
-- Apps that resist window positioning
-- Apps with complex window hierarchies
+### Workspace Synchronization
+
+**All monitors, one workspace**:
+- Alt + 1 shows workspace 1 on ALL monitors
+- Each monitor shows its own windows in workspace 1
+- Switching workspace updates all monitors simultaneously
+
+**Per-monitor window lists**:
+- Monitor 0: Workspace 1 has [Window A, Window B]
+- Monitor 1: Workspace 1 has [Window C, Window D, Window E]
+- Both are workspace 1 but have different content
+
+### Limitations
+
+- No per-monitor workspace selection
+- Monitor DPI changes not handled
+- Window reassignment on disconnect may fail
+- Monitor ordering may change on reconnection
 
 ### Future Enhancements
 
-1. **Per-window fullscreen**: Store fullscreen state per window
-2. **Fullscreen with decorations**: Preserve title bar, etc.
-3. **Fullscreen on specific monitor**: Support multi-monitor fullscreen
-4. **Auto-exit fullscreen**: Detect external fullscreen events
+1. **Per-monitor workspaces**: Independent workspace per monitor
+2. **Monitor-specific gaps**: Different gaps per monitor
+3. **DPI awareness**: Handle DPI scaling changes
+4. **Window reassignment**: Smart reassignment on monitor disconnect
+5. **Monitor profiles**: Save/restore monitor configurations
 
 ## Next Steps
 
-Proceed to [STEP_14.md](STEP_14.md) to implement multi-monitor support enhancements.
+Proceed to [STEP_15.md](STEP_15.md) to implement auto-start configuration.
