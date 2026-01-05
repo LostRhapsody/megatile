@@ -1,14 +1,14 @@
 //! Visual workspace status bar indicator.
 //!
-//! Displays a floating bar showing the current workspace with dot indicators.
-//! The bar uses the system accent color and has a rounded appearance.
+//! Displays a floating bar showing workspace indicators with numbers,
+//! and the current date/time. Uses the system accent color with a dimmed backdrop.
 
 use std::sync::OnceLock;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, Ellipse, EndPaint,
-    HBRUSH, HDC, HPEN, InvalidateRect, PAINTSTRUCT, PS_SOLID, RoundRect, SelectObject,
-    SetWindowRgn,
+    BeginPaint, CreateFontW, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteObject,
+    Ellipse, EndPaint, HBRUSH, HDC, HFONT, HPEN, InvalidateRect, PAINTSTRUCT, PS_SOLID, RoundRect,
+    SelectObject, SetBkMode, SetTextColor, SetWindowRgn, TRANSPARENT, TextOutW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -24,26 +24,24 @@ use crate::windows_lib::get_accent_color;
 
 /// Maximum number of workspaces supported.
 pub const STATUSBAR_MAX_WORKSPACES: u8 = 9;
-/// Number of workspace dots visible at once (scrolling window).
-pub const STATUSBAR_VISIBLE_DOTS: u8 = 5;
 /// Height of the status bar in pixels.
-pub const STATUSBAR_HEIGHT: i32 = 16;
+pub const STATUSBAR_HEIGHT: i32 = 20;
 /// Width of the status bar in pixels.
-pub const STATUSBAR_WIDTH: i32 = 150;
+pub const STATUSBAR_WIDTH: i32 = 280;
 /// Gap above the status bar.
 pub const STATUSBAR_TOP_GAP: i32 = 2;
 /// Gap below the status bar.
-pub const STATUSBAR_BOTTOM_GAP: i32 = 4;
+pub const STATUSBAR_BOTTOM_GAP: i32 = 2;
 /// Total vertical space reserved for the status bar area.
 pub const STATUSBAR_VERTICAL_RESERVE: i32 =
     STATUSBAR_TOP_GAP + STATUSBAR_HEIGHT + STATUSBAR_BOTTOM_GAP;
 
-const DOT_DIAMETER: i32 = 8;
-const DOT_SPACING: i32 = 24;
-const CORNER_RADIUS: i32 = 12;
-const PADDING: i32 = 10;
+const DOT_DIAMETER: i32 = 14;
+const DOT_SPACING: i32 = 18;
+const CORNER_RADIUS: i32 = 10;
+const PADDING_LEFT: i32 = 8;
+const PADDING_RIGHT: i32 = 8;
 const DEFAULT_ACCENT_COLOR: u32 = 0x007A7A7A;
-const INACTIVE_GREY: u8 = 180;
 
 static STATUSBAR_CLASS: OnceLock<Result<(), String>> = OnceLock::new();
 const STATUSBAR_CLASS_NAME: PCWSTR = w!("MegaTileStatusBar");
@@ -54,6 +52,9 @@ struct StatusBarState {
     active_workspace: u8,
     total_workspaces: u8,
     accent_color: u32,
+    /// Cached time string for display.
+    time_string: [u16; 16],
+    time_string_len: usize,
 }
 
 /// A floating status bar showing workspace indicators.
@@ -73,11 +74,14 @@ impl StatusBar {
         ensure_class(hinstance.into())?;
 
         let accent_color = get_accent_color().unwrap_or(DEFAULT_ACCENT_COLOR);
-        let state = Box::new(StatusBarState {
+        let mut state = Box::new(StatusBarState {
             active_workspace: 1,
-            total_workspaces: STATUSBAR_VISIBLE_DOTS,
+            total_workspaces: STATUSBAR_MAX_WORKSPACES,
             accent_color,
+            time_string: [0u16; 16],
+            time_string_len: 0,
         });
+        update_time_string(&mut state);
 
         let hwnd = unsafe {
             CreateWindowExW(
@@ -126,6 +130,7 @@ impl StatusBar {
         if let Ok(color) = get_accent_color() {
             self.state.accent_color = color;
         }
+        update_time_string(&mut self.state);
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, BOOL(0).into());
         }
@@ -212,6 +217,77 @@ extern "system" fn statusbar_wnd_proc(
     }
 }
 
+/// Updates the time string in the state with current time.
+fn update_time_string(state: &mut StatusBarState) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Get current time
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Convert to local time components (simple UTC offset approximation)
+    // In a real implementation, you'd use proper timezone handling
+    let secs_per_day = 86400u64;
+    let secs_per_hour = 3600u64;
+    let secs_per_min = 60u64;
+
+    // Days since Unix epoch
+    let days = now / secs_per_day;
+    let time_of_day = now % secs_per_day;
+
+    let hours = (time_of_day / secs_per_hour) % 24;
+    let minutes = (time_of_day % secs_per_hour) / secs_per_min;
+
+    // Calculate date (simplified - days since 1970-01-01)
+    // This is a simplified calculation that doesn't account for leap years perfectly
+    let mut remaining_days = days as i64;
+    let mut year = 1970i32;
+
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if remaining_days < days_in_year {
+            break;
+        }
+        remaining_days -= days_in_year;
+        year += 1;
+    }
+
+    let days_in_months: [i64; 12] = if is_leap_year(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1u32;
+    for days_in_month in days_in_months.iter() {
+        if remaining_days < *days_in_month {
+            break;
+        }
+        remaining_days -= days_in_month;
+        month += 1;
+    }
+    let day = remaining_days + 1;
+
+    // Format: "HH:MM DD/MM"
+    let time_str = format!("{:02}:{:02} {:02}/{:02}", hours, minutes, day, month);
+
+    // Convert to UTF-16
+    let mut i = 0;
+    for ch in time_str.encode_utf16() {
+        if i < state.time_string.len() {
+            state.time_string[i] = ch;
+            i += 1;
+        }
+    }
+    state.time_string_len = i;
+}
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
 unsafe fn paint_statusbar(hwnd: HWND) {
     unsafe {
         let state_ptr = get_state_ptr(hwnd);
@@ -232,16 +308,19 @@ unsafe fn paint_statusbar(hwnd: HWND) {
 
         draw_background(hdc, &rect, state.accent_color);
         draw_workspace_dots(hdc, &rect, state);
+        draw_time(hdc, &rect, state);
 
         let _ = EndPaint(hwnd, &ps);
     };
 }
 
 unsafe fn draw_background(hdc: HDC, rect: &RECT, accent_color: u32) {
-    let bg_color = subtle_background(accent_color);
+    let bg_color = dimmed_desaturated_background(accent_color);
     unsafe {
         let brush = CreateSolidBrush(COLORREF(bg_color));
-        let pen = CreatePen(PS_SOLID, 1, COLORREF(accent_color));
+        // Use a slightly darker border
+        let border_color = darken_color(bg_color, 0.8);
+        let pen = CreatePen(PS_SOLID, 1, COLORREF(border_color));
 
         let old_pen = SelectObject(hdc, pen.into());
         let old_brush = SelectObject(hdc, brush.into());
@@ -265,32 +344,36 @@ unsafe fn draw_background(hdc: HDC, rect: &RECT, accent_color: u32) {
 
 unsafe fn draw_workspace_dots(hdc: HDC, rect: &RECT, state: &StatusBarState) {
     let total = state.total_workspaces.min(STATUSBAR_MAX_WORKSPACES);
-    let visible = total.min(STATUSBAR_VISIBLE_DOTS);
-    let (start, _) = workspace_window_range(state.active_workspace, total, visible);
 
-    let content_width = DOT_DIAMETER + (visible as i32 - 1) * DOT_SPACING;
-    let available = rect.right - rect.left;
-    let mut start_x = (available - content_width) / 2;
-    if start_x < PADDING {
-        start_x = PADDING;
-    }
-
+    // Start at far left with padding
+    let start_x = rect.left + PADDING_LEFT;
     let center_y = rect.top + (rect.bottom - rect.top - DOT_DIAMETER) / 2;
-    let inactive = inactive_dot_color(state.accent_color);
 
-    for i in 0..visible {
-        let workspace_id = start + i;
-        let color = if workspace_id == state.active_workspace {
-            state.accent_color
+    // Create font for workspace numbers
+    let font = create_small_font();
+    let old_font = SelectObject(hdc, font.into());
+    let _ = SetBkMode(hdc, TRANSPARENT);
+
+    for i in 0..total {
+        let workspace_id = i + 1;
+        let x = start_x + (i as i32) * DOT_SPACING;
+        let is_active = workspace_id == state.active_workspace;
+
+        // Draw the dot
+        let (dot_color, text_color) = if is_active {
+            // Active: opaque accent color dot, white text
+            (state.accent_color, 0x00FFFFFF_u32)
         } else {
-            inactive
+            // Inactive: semi-transparent dot, dark text
+            (
+                semi_transparent_dot_color(state.accent_color),
+                0x00444444_u32,
+            )
         };
 
-        let x = start_x + (i as i32) * DOT_SPACING;
-
         unsafe {
-            let brush: HBRUSH = CreateSolidBrush(COLORREF(color));
-            let pen: HPEN = CreatePen(PS_SOLID, 1, COLORREF(color));
+            let brush: HBRUSH = CreateSolidBrush(COLORREF(dot_color));
+            let pen: HPEN = CreatePen(PS_SOLID, 1, COLORREF(dot_color));
             let old_pen = SelectObject(hdc, pen.into());
             let old_brush = SelectObject(hdc, brush.into());
 
@@ -300,42 +383,110 @@ unsafe fn draw_workspace_dots(hdc: HDC, rect: &RECT, state: &StatusBarState) {
             SelectObject(hdc, old_brush);
             let _ = DeleteObject(pen.into());
             let _ = DeleteObject(brush.into());
+
+            // Draw the workspace number inside the dot
+            let _ = SetTextColor(hdc, COLORREF(text_color));
+            let num_char = [b'0' as u16 + workspace_id as u16];
+            // Center the number in the dot
+            let text_x = x + (DOT_DIAMETER - 6) / 2;
+            let text_y = center_y + (DOT_DIAMETER - 10) / 2;
+            let _ = TextOutW(hdc, text_x, text_y, &num_char);
         }
+    }
+
+    SelectObject(hdc, old_font);
+    let _ = DeleteObject(font.into());
+}
+
+unsafe fn draw_time(hdc: HDC, rect: &RECT, state: &StatusBarState) {
+    if state.time_string_len == 0 {
+        return;
+    }
+
+    // Create font for time display
+    let font = create_small_font();
+    let old_font = SelectObject(hdc, font.into());
+    let _ = SetBkMode(hdc, TRANSPARENT);
+    // Use a light color for the time text
+    let _ = SetTextColor(hdc, COLORREF(0x00EEEEEE));
+
+    // Position time at far right
+    let time_width = (state.time_string_len as i32) * 7; // Approximate character width
+    let x = rect.right - PADDING_RIGHT - time_width;
+    let y = rect.top + (rect.bottom - rect.top - 12) / 2;
+
+    unsafe {
+        let _ = TextOutW(hdc, x, y, &state.time_string[..state.time_string_len]);
+    }
+
+    SelectObject(hdc, old_font);
+    let _ = DeleteObject(font.into());
+}
+
+unsafe fn create_small_font() -> HFONT {
+    unsafe {
+        CreateFontW(
+            11,             // Height
+            0,              // Width (0 = auto)
+            0,              // Escapement
+            0,              // Orientation
+            400,            // Weight (400 = normal)
+            0,              // Italic
+            0,              // Underline
+            0,              // StrikeOut
+            0,              // CharSet
+            0,              // OutPrecision
+            0,              // ClipPrecision
+            0,              // Quality
+            0,              // PitchAndFamily
+            w!("Segoe UI"), // Face name
+        )
     }
 }
 
-fn workspace_window_range(active: u8, total: u8, visible: u8) -> (u8, u8) {
-    let total = total as i32;
-    let visible = visible as i32;
-    let active = active as i32;
+/// Creates a dimmed and desaturated version of the accent color for the background.
+fn dimmed_desaturated_background(accent_color: u32) -> u32 {
+    let (r, g, b) = split_color(accent_color);
 
-    let start = if total <= visible || active <= 3 {
-        1
-    } else if active > total - 2 {
-        total - visible + 1
-    } else {
-        active - 2
-    };
+    // Convert to grayscale-ish by averaging with gray
+    let gray = ((r as u32 + g as u32 + b as u32) / 3) as u8;
 
-    let start = start.max(1) as u8;
-    (start, start + visible as u8 - 1)
+    // Blend towards gray (desaturate) and darken
+    let desaturate_factor = 0.6_f32; // More desaturation
+    let darken_factor = 0.4_f32; // Significantly darken
+
+    let dr = blend_channel(r, gray, desaturate_factor);
+    let dg = blend_channel(g, gray, desaturate_factor);
+    let db = blend_channel(b, gray, desaturate_factor);
+
+    // Then darken
+    let fr = (dr as f32 * darken_factor) as u8;
+    let fg = (dg as f32 * darken_factor) as u8;
+    let fb = (db as f32 * darken_factor) as u8;
+
+    compose_color(fr, fg, fb)
 }
 
-fn subtle_background(accent_color: u32) -> u32 {
+/// Creates a semi-transparent looking dot color for inactive workspaces.
+fn semi_transparent_dot_color(accent_color: u32) -> u32 {
     let (r, g, b) = split_color(accent_color);
+
+    // Blend with a lighter gray to simulate transparency
+    let target = 180u8;
     compose_color(
-        blend_channel(r, 230, 0.35),
-        blend_channel(g, 230, 0.35),
-        blend_channel(b, 230, 0.35),
+        blend_channel(r, target, 0.3),
+        blend_channel(g, target, 0.3),
+        blend_channel(b, target, 0.3),
     )
 }
 
-fn inactive_dot_color(accent_color: u32) -> u32 {
-    let (r, g, b) = split_color(accent_color);
+/// Darkens a color by a factor (0.0 = black, 1.0 = unchanged).
+fn darken_color(color: u32, factor: f32) -> u32 {
+    let (r, g, b) = split_color(color);
     compose_color(
-        blend_channel(r, INACTIVE_GREY, 0.25),
-        blend_channel(g, INACTIVE_GREY, 0.25),
-        blend_channel(b, INACTIVE_GREY, 0.25),
+        (r as f32 * factor) as u8,
+        (g as f32 * factor) as u8,
+        (b as f32 * factor) as u8,
     )
 }
 
