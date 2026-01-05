@@ -25,7 +25,7 @@ This document provides essential information for agentic coding assistants worki
 - **Run tests with output**: `cargo test -- --nocapture`
 - **Run benchmarks**: `cargo bench`
 
-> **Note**: Currently, the project uses manual testing only. Each implementation step includes specific testing instructions in the corresponding STEP_N.md file.
+> **Note**: Currently, the project uses manual testing only.
 
 ### Pre-commit Checklist
 Before committing changes, always run:
@@ -261,5 +261,4 @@ use workspace::Workspace;
 
 **Version**: 1.0
 **Last Updated**: Agent-generated
-**Project Phase**: Implementation (STEP_8 pending)</content>
-<parameter name="filePath">C:\Users\evan\megatile\AGENTS.md
+**Project Phase**: Beta, feature complete but still bug squashing or adding QoL improvements
