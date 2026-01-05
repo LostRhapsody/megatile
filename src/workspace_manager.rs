@@ -89,15 +89,6 @@ impl WorkspaceManager {
         self.toggle_statusbar(desired);
     }
 
-    /// Returns the total window count across all monitors in the active workspace.
-    pub fn get_active_workspace_window_count(&self) -> usize {
-        let mut count = 0;
-        for monitor in self.monitors.iter() {
-            count += monitor.get_active_workspace().windows.len();
-        }
-        count
-    }
-
     /// Updates window decorations (border color, transparency) based on focus state.
     pub fn update_decorations(&mut self) {
         let focused_hwnd = unsafe { GetForegroundWindow() };
@@ -282,15 +273,6 @@ impl WorkspaceManager {
             }
         }
         None
-    }
-
-    /// Returns all windows in the active workspace on a specific monitor.
-    pub fn get_active_workspace_windows(&self, monitor_index: usize) -> Vec<Window> {
-        if let Some(monitor) = self.monitors.get(monitor_index) {
-            monitor.get_active_workspace().windows.clone()
-        } else {
-            Vec::new()
-        }
     }
 
     /// Re-enumerates monitors and updates workspace assignments.
@@ -623,7 +605,7 @@ impl WorkspaceManager {
         let mut window_to_move = None;
         let mut source_monitor_idx = 0;
         let mut should_switch = false;
-        let mut result = Err("Window not found".to_string());
+        let mut _result = Err("Window not found".to_string());
 
         println!("DEBUG: Searching for window in monitors to remove");
         for (m_idx, monitor) in self.monitors.iter_mut().enumerate() {
@@ -725,10 +707,10 @@ impl WorkspaceManager {
             }
 
             should_switch = true;
-            result = Ok(());
+            _result = Ok(());
         } else {
             println!("DEBUG: Window {:?} not found in any workspace", hwnd.0);
-            result = Err("Window not found".to_string());
+            _result = Err("Window not found".to_string());
         }
 
         if should_switch {
@@ -740,13 +722,7 @@ impl WorkspaceManager {
             println!("DEBUG: Window move to workspace completed successfully");
         }
 
-        result
-    }
-
-    /// Moves the focused window to another workspace and follows it.
-    pub fn move_window_to_workspace_follow(&mut self, new_workspace: u8) -> Result<(), String> {
-        // Move already switches to the target workspace
-        self.move_window_to_workspace(new_workspace)
+        _result
     }
 
     /// Applies tiling layout to all active workspaces on all monitors.
@@ -1417,24 +1393,6 @@ impl WorkspaceManager {
             Ok(())
         } else {
             Err("Window not found in active workspace".to_string())
-        }
-    }
-
-    /// Exits fullscreen mode for all windows.
-    pub fn exit_fullscreen_all(&mut self) {
-        for monitor in self.monitors.iter_mut() {
-            for workspace in &mut monitor.workspaces {
-                for window in &mut workspace.windows {
-                    if window.is_fullscreen {
-                        crate::windows_lib::restore_window_from_fullscreen(
-                            hwnd_from_isize(window.hwnd),
-                            window.original_rect,
-                        )
-                        .ok();
-                        window.is_fullscreen = false;
-                    }
-                }
-            }
         }
     }
 

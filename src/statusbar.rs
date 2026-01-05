@@ -145,11 +145,6 @@ impl StatusBar {
         }
     }
 
-    /// Returns the window handle.
-    pub fn get_hwnd(&self) -> HWND {
-        self.hwnd
-    }
-
     fn sync_state_pointer(&mut self) {
         let ptr = self.state.as_mut() as *mut StatusBarState as isize;
         unsafe {

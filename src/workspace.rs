@@ -102,27 +102,6 @@ impl Workspace {
         self.windows.iter_mut().find(|w| w.hwnd == hwnd.0 as isize)
     }
 
-    /// Returns the total number of windows (both tiled and floating).
-    pub fn total_window_count(&self) -> usize {
-        self.windows.len()
-    }
-
-    /// Returns the currently focused window, if any.
-    pub fn get_focused_window(&self) -> Option<&Window> {
-        self.windows.iter().find(|w| w.is_focused)
-    }
-
-    /// Sets the focus state for a window.
-    pub fn set_focus(&mut self, hwnd: HWND, focused: bool) {
-        let hwnd_val = hwnd.0 as isize;
-        if let Some(window) = self.get_window_mut(hwnd) {
-            window.is_focused = focused;
-            if focused {
-                self.focused_window_hwnd = Some(hwnd_val);
-            }
-        }
-    }
-
     /// Returns the count of tiled windows only.
     pub fn window_count(&self) -> usize {
         self.windows.iter().filter(|w| w.is_tiled).count()
@@ -156,24 +135,9 @@ impl Monitor {
         }
     }
 
-    /// Searches all workspaces for a window by handle.
-    pub fn find_window_by_hwnd_mut(&mut self, hwnd: isize) -> Option<&mut Window> {
-        for workspace in &mut self.workspaces {
-            if let Some(window) = workspace.windows.iter_mut().find(|w| w.hwnd == hwnd) {
-                return Some(window);
-            }
-        }
-        None
-    }
-
     /// Returns a reference to the active workspace.
     pub fn get_active_workspace(&self) -> &Workspace {
         &self.workspaces[(self.active_workspace - 1) as usize]
-    }
-
-    /// Returns a mutable reference to the active workspace.
-    pub fn get_active_workspace_mut(&mut self) -> &mut Workspace {
-        &mut self.workspaces[(self.active_workspace - 1) as usize]
     }
 
     /// Returns a workspace by number (1-9).

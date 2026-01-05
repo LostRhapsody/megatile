@@ -12,8 +12,7 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromWindow,
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::BOOL;
@@ -29,7 +28,9 @@ pub struct WindowInfo {
     pub title: String,
     pub class_name: String,
     pub rect: RECT,
+    #[allow(dead_code)]
     pub is_visible: bool,
+    #[allow(dead_code)]
     pub is_minimized: bool,
 }
 
@@ -245,11 +246,6 @@ pub fn get_window_rect(hwnd: HWND) -> Result<RECT, String> {
     Ok(rect)
 }
 
-/// Checks if a window is currently hidden (not visible).
-pub fn is_window_hidden(hwnd: HWND) -> bool {
-    unsafe { !IsWindowVisible(hwnd).as_bool() }
-}
-
 /// Information about a display monitor.
 pub struct MonitorInfo {
     /// Windows HMONITOR handle as isize.
@@ -312,15 +308,6 @@ pub fn close_window(hwnd: HWND) -> Result<(), String> {
     }
 }
 
-/// Forces a window to close by destroying it.
-pub fn force_close_window(hwnd: HWND) -> Result<(), String> {
-    unsafe {
-        // Force terminate the window
-        DestroyWindow(hwnd).map_err(|e| format!("Failed to destroy window: {}", e))?;
-        Ok(())
-    }
-}
-
 /// Sets a window to fullscreen mode covering the specified monitor.
 pub fn set_window_fullscreen(hwnd: HWND, monitor_rect: RECT) -> Result<(), String> {
     unsafe {
@@ -356,24 +343,6 @@ pub fn restore_window_from_fullscreen(hwnd: HWND, original_rect: RECT) -> Result
         .map_err(|e| format!("Failed to restore window from fullscreen: {}", e))?;
 
         Ok(())
-    }
-}
-
-/// Gets the screen bounds of the monitor containing the specified window.
-pub fn get_monitor_rect(hwnd: HWND) -> Option<RECT> {
-    unsafe {
-        let mut monitor_info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-
-        let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-
-        if GetMonitorInfoW(hmonitor, &mut monitor_info).as_bool() {
-            Some(monitor_info.rcMonitor)
-        } else {
-            None
-        }
     }
 }
 

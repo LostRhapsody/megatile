@@ -39,7 +39,6 @@ pub enum HotkeyAction {
     // Workspace switching
     SwitchWorkspace(u8),
     MoveToWorkspace(u8),
-    MoveToWorkspaceFollow(u8),
 
     // Window operations
     CloseWindow,
@@ -62,8 +61,7 @@ impl HotkeyManager {
     /// - `Alt + Arrows`: Move focus
     /// - `Alt + Shift + Arrows`: Move window
     /// - `Alt + 1-9`: Switch workspace
-    /// - `Alt + Shift + 1-9`: Move window to workspace
-    /// - `Alt + Ctrl + Shift + 1-9`: Move window to workspace and follow
+    /// - `Alt + Shift + 1-9`: Move window to workspace and follow
     /// - `Alt + +/-`: Resize horizontally
     /// - `Alt + Shift + +/-`: Resize vertically
     /// - `Alt + J`: Flip region
@@ -143,12 +141,6 @@ impl HotkeyManager {
                 vk,
                 19 + i as i32,
                 HotkeyAction::MoveToWorkspace(ws),
-            ));
-            hotkeys.push((
-                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
-                vk,
-                36 + i as i32,
-                HotkeyAction::MoveToWorkspaceFollow(ws),
             ));
         }
 

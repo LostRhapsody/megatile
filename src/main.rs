@@ -222,15 +222,6 @@ fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
             }
             Err(e) => eprintln!("Failed to move window: {}", e),
         },
-        hotkeys::HotkeyAction::MoveToWorkspaceFollow(num) => {
-            match wm.move_window_to_workspace_follow(num) {
-                Ok(()) => {
-                    println!("Moved window to workspace {} and followed", num);
-                    wm.print_workspace_status();
-                }
-                Err(e) => eprintln!("Failed to move window: {}", e),
-            }
-        }
         hotkeys::HotkeyAction::ToggleTiling => {
             if let Some(focused) = wm.get_focused_window()
                 && let Err(e) = wm.toggle_window_tiling(HWND(focused.hwnd as _))
