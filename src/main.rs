@@ -70,6 +70,7 @@ enum WindowEvent {
     Hotkey(hotkeys::HotkeyAction),
     WindowCreated(isize),
     WindowDestroyed(isize),
+    WindowMinimized(isize),
     WindowMoved(isize),
     FocusChanged(isize),
     DisplayChange,
@@ -116,6 +117,9 @@ unsafe extern "system" fn win_event_proc(
         EVENT_OBJECT_DESTROY => {
             push_event(WindowEvent::WindowDestroyed(hwnd.0 as isize));
         }
+        EVENT_SYSTEM_MINIMIZESTART => {
+            push_event(WindowEvent::WindowMinimized(hwnd.0 as isize));
+        }
         EVENT_OBJECT_LOCATIONCHANGE => {
             push_event(WindowEvent::WindowMoved(hwnd.0 as isize));
         }
@@ -132,6 +136,15 @@ fn cleanup_on_exit(wm: &mut WorkspaceManager) {
     // Get all managed windows from all workspaces
     let all_hwnds = wm.get_all_managed_hwnds();
     println!("Found {} managed windows to restore", all_hwnds.len());
+
+    let normal_windows = get_normal_windows();
+    println!("Found {} normal windows to restore", normal_windows.len());
+    for window_info in normal_windows {
+        println!(
+            "  - {} (Class: {})",
+            window_info.title, window_info.class_name
+        );
+    }
 
     let mut restored_count = 0;
     let mut failed_count = 0;
@@ -353,6 +366,19 @@ fn main() {
         )
     };
 
+    // Setup minimize event hook
+    let _minimize_hook = unsafe {
+        SetWinEventHook(
+            EVENT_SYSTEM_MINIMIZESTART,
+            EVENT_SYSTEM_MINIMIZEEND,
+            None,
+            Some(win_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        )
+    };
+
     // Initialize tray icon
     let tray = TrayManager::new().expect("Failed to create tray icon");
 
@@ -381,6 +407,7 @@ fn main() {
         let y = rect.top + STATUSBAR_TOP_GAP;
 
         statusbar.set_position(x, y, statusbar_width, statusbar_height);
+        statusbar.show(); // Show the status bar on startup
     }
 
     wm.set_statusbar(statusbar);
@@ -480,9 +507,17 @@ fn main() {
                         println!("Event: Window Destroyed {:?}", hwnd);
                         wm.remove_window_with_tiling(hwnd);
                     }
-                    WindowEvent::WindowMoved(_hwnd_val) => {
-                        wm.update_window_positions();
-                        wm.update_statusbar();
+                    WindowEvent::WindowMinimized(hwnd_val) => {
+                        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                        println!("Event: Window Minimized {:?}", hwnd);
+                        wm.handle_window_minimized(hwnd);
+                    }
+                    WindowEvent::WindowMoved(hwnd_val) => {
+                        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                        // Only process move events if not from our own positioning
+                        if !wm.is_positioning_window(hwnd) {
+                            wm.update_window_positions();
+                        }
                     }
                     WindowEvent::FocusChanged(_hwnd_val) => {
                         wm.update_decorations();
@@ -494,8 +529,10 @@ fn main() {
                         }
                     }
                     WindowEvent::PeriodicCheck => {
-                        wm.update_window_positions();
+                        // Don't call update_window_positions here - it causes feedback loops
+                        // WindowMoved events will handle position updates
                         wm.update_decorations();
+                        wm.cleanup_minimized_windows();
                         if wm.check_monitor_changes() {
                             println!("Monitor change detected by periodic check");
                             if let Err(e) = wm.reenumerate_monitors() {

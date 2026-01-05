@@ -432,6 +432,11 @@ pub fn enumerate_monitors() -> Vec<MonitorInfo> {
     monitors
 }
 
+/// Checks if a window is currently minimized.
+pub fn is_window_minimized(hwnd: HWND) -> bool {
+    unsafe { IsIconic(hwnd).as_bool() }
+}
+
 /// Closes a window gracefully by sending WM_CLOSE.
 pub fn close_window(hwnd: HWND) -> Result<(), String> {
     unsafe {

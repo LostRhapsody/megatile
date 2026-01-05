@@ -107,6 +107,7 @@ pub fn init_gdiplus() -> Result<(), String> {
             return Err(format!("GdiplusStartup failed with status: {}", status.0));
         }
         GDIPLUS_TOKEN = token;
+
         Ok(())
     }
 }
@@ -451,22 +452,6 @@ unsafe fn draw_background_gdiplus(graphics: *mut GpGraphics, rect: &RECT, accent
         }
 
         GdipDeleteBrush(brush as *mut GpBrush);
-
-        // Draw border with rounded rectangle path
-        let border_color = darken_color(bg_color, 0.85);
-        let (br, bg_c, bb) = split_color(border_color);
-        let mut pen: *mut GpPen = std::ptr::null_mut();
-        let argb_border = make_argb(255, br, bg_c, bb);
-        if GdipCreatePen1(argb_border, 2.0, Unit(0), &mut pen).0 == 0 {
-            // Inset the border slightly
-            let border_path =
-                create_rounded_rect_path(x + 1.0, y + 1.0, width - 2.0, height - 2.0, radius);
-            if !border_path.is_null() {
-                let _ = GdipDrawPath(graphics, pen, border_path);
-                GdipDeletePath(border_path);
-            }
-            GdipDeletePen(pen);
-        }
     }
 }
 
