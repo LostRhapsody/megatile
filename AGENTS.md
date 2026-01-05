@@ -168,7 +168,7 @@ use workspace::Workspace;
 3. Run `cargo clippy` and `cargo fmt` to ensure code quality
 4. Run `cargo build` to verify compilation
 5. Test manually according to step instructions
-6. Update AGENT.md progress tracking
+6. Update AGENTS.md progress tracking
 7. Commit with clear, focused commit messages
 
 ### Code Review Checklist
