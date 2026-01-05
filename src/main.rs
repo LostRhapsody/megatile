@@ -292,6 +292,26 @@ fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
         hotkeys::HotkeyAction::ToggleStatusBar => {
             wm.invert_statusbar_visibility();
         }
+        hotkeys::HotkeyAction::MoveToMonitorLeft => {
+            if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Left) {
+                eprintln!("Failed to move window to monitor: {}", e);
+            }
+        }
+        hotkeys::HotkeyAction::MoveToMonitorRight => {
+            if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Right) {
+                eprintln!("Failed to move window to monitor: {}", e);
+            }
+        }
+        hotkeys::HotkeyAction::MoveToMonitorUp => {
+            if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Up) {
+                eprintln!("Failed to move window to monitor: {}", e);
+            }
+        }
+        hotkeys::HotkeyAction::MoveToMonitorDown => {
+            if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Down) {
+                eprintln!("Failed to move window to monitor: {}", e);
+            }
+        }
     }
 }
 

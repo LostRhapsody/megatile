@@ -208,6 +208,68 @@ impl WorkspaceManager {
         None
     }
 
+    /// Finds the monitor in the specified direction from the given monitor.
+    ///
+    /// Returns the index of the adjacent monitor in the specified direction,
+    /// or None if no monitor exists in that direction.
+    pub fn find_monitor_in_direction(
+        &self,
+        monitor_idx: usize,
+        direction: FocusDirection,
+    ) -> Option<usize> {
+        let current_monitor = self.monitors.get(monitor_idx)?;
+        let current_rect = current_monitor.rect;
+
+        // Calculate center point of current monitor
+        let current_center_x = (current_rect.left + current_rect.right) / 2;
+        let current_center_y = (current_rect.top + current_rect.bottom) / 2;
+
+        let mut candidates: Vec<(usize, i32)> = Vec::new();
+
+        for (i, monitor) in self.monitors.iter().enumerate() {
+            if i == monitor_idx {
+                continue; // Skip the current monitor
+            }
+
+            let monitor_rect = monitor.rect;
+            let monitor_center_x = (monitor_rect.left + monitor_rect.right) / 2;
+            let monitor_center_y = (monitor_rect.top + monitor_rect.bottom) / 2;
+
+            let matches_direction = match direction {
+                FocusDirection::Left => {
+                    // Monitor is to the left if its center X is less than current center X
+                    monitor_center_x < current_center_x
+                }
+                FocusDirection::Right => {
+                    // Monitor is to the right if its center X is greater than current center X
+                    monitor_center_x > current_center_x
+                }
+                FocusDirection::Up => {
+                    // Monitor is above if its center Y is less than current center Y
+                    monitor_center_y < current_center_y
+                }
+                FocusDirection::Down => {
+                    // Monitor is below if its center Y is greater than current center Y
+                    monitor_center_y > current_center_y
+                }
+            };
+
+            if matches_direction {
+                // Calculate distance (Manhattan distance for simplicity)
+                let dx = (monitor_center_x - current_center_x).abs();
+                let dy = (monitor_center_y - current_center_y).abs();
+                let distance = dx + dy;
+                candidates.push((i, distance));
+            }
+        }
+
+        // Return the closest monitor in the specified direction
+        candidates
+            .iter()
+            .min_by_key(|(_, distance)| *distance)
+            .map(|(idx, _)| *idx)
+    }
+
     /// Adds a window to the workspace manager.
     pub fn add_window(&mut self, window: Window) {
         println!(
@@ -741,6 +803,112 @@ impl WorkspaceManager {
         }
 
         _result
+    }
+
+    /// Moves the focused window to an adjacent monitor in the specified direction.
+    ///
+    /// If no monitor exists in the specified direction, this function returns Ok(())
+    /// without moving the window (no-op behavior).
+    pub fn move_window_to_monitor(&mut self, direction: FocusDirection) -> Result<(), String> {
+        println!("DEBUG: Moving window to monitor in direction {:?}", direction);
+
+        // Get currently focused window
+        let focused = self.get_focused_window();
+
+        if focused.is_none() {
+            println!("DEBUG: No focused window found for moving to monitor");
+            return Err("No focused window".to_string());
+        }
+
+        let focused_window = focused.unwrap();
+        let hwnd = HWND(focused_window.hwnd as *mut std::ffi::c_void);
+        let source_monitor_idx = focused_window.monitor;
+        let current_workspace = focused_window.workspace;
+
+        println!(
+            "DEBUG: Moving window {:?} from monitor {} to monitor in direction {:?}",
+            hwnd.0, source_monitor_idx, direction
+        );
+
+        // Find target monitor in the specified direction
+        let target_monitor_idx = match self.find_monitor_in_direction(source_monitor_idx, direction) {
+            Some(idx) => idx,
+            None => {
+                println!(
+                    "DEBUG: No monitor found in direction {:?} from monitor {}",
+                    direction, source_monitor_idx
+                );
+                return Ok(()); // No monitor in that direction, no-op
+            }
+        };
+
+        if source_monitor_idx == target_monitor_idx {
+            println!(
+                "DEBUG: Window {:?} already on target monitor {}, no move needed",
+                hwnd.0, target_monitor_idx
+            );
+            return Ok(()); // Already on target monitor
+        }
+
+        println!(
+            "DEBUG: Target monitor {} found, moving window from monitor {}",
+            target_monitor_idx, source_monitor_idx
+        );
+
+        // Remove window from current monitor/workspace
+        let mut window_to_move = None;
+
+        if let Some(monitor) = self.monitors.get_mut(source_monitor_idx) {
+            if let Some(workspace) = monitor.get_workspace_mut(current_workspace) {
+                if let Some(window) = workspace.remove_window(hwnd) {
+                    window_to_move = Some(window);
+                    println!(
+                        "DEBUG: Removed window from monitor {} workspace {}",
+                        source_monitor_idx, current_workspace
+                    );
+                }
+            }
+        }
+
+        if let Some(mut window) = window_to_move {
+            // Update window's monitor index
+            window.monitor = target_monitor_idx;
+            println!("DEBUG: Updated window monitor to {}", target_monitor_idx);
+
+            // Add window to target monitor's active workspace (same workspace number)
+            if let Some(target_monitor) = self.monitors.get_mut(target_monitor_idx) {
+                if let Some(target_workspace) = target_monitor.get_workspace_mut(current_workspace) {
+                    let hwnd_val = window.hwnd;
+                    target_workspace.add_window(window.clone());
+                    target_workspace.focused_window_hwnd = Some(hwnd_val); // Ensure moved window is focused
+                    println!(
+                        "DEBUG: Added window to monitor {} workspace {}",
+                        target_monitor_idx, current_workspace
+                    );
+                } else {
+                    return Err(format!(
+                        "Failed to find workspace {} on target monitor {}",
+                        current_workspace, target_monitor_idx
+                    ));
+                }
+            } else {
+                return Err(format!("Failed to access target monitor {}", target_monitor_idx));
+            }
+
+            // Re-tile both source and target monitors' active workspaces
+            println!("DEBUG: Re-tiling source and target monitors");
+            self.tile_active_workspaces();
+            self.apply_window_positions();
+
+            // Keep focus on the moved window
+            println!("DEBUG: Restoring focus to moved window {:?}", hwnd.0);
+            self.set_window_focus(hwnd);
+            println!("DEBUG: Window moved to monitor successfully");
+
+            Ok(())
+        } else {
+            Err("Failed to remove window from source monitor".to_string())
+        }
     }
 
     /// Applies tiling layout to all active workspaces on all monitors.
