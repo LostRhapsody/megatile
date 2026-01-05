@@ -1,3 +1,13 @@
+//! High-level workspace management and state coordination.
+//!
+//! The [`WorkspaceManager`] is the central coordinator for all window management
+//! operations. It handles:
+//! - Window tracking across workspaces and monitors
+//! - Workspace switching with window visibility management
+//! - Tiling layout application
+//! - Focus management and window decorations
+//! - Monitor hot-plugging
+
 use super::workspace::{Monitor, Window};
 use crate::statusbar::{STATUSBAR_MAX_WORKSPACES, StatusBar};
 use crate::tiling::DwindleTiler;
@@ -13,6 +23,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
     ShowWindow,
 };
 
+/// Converts an isize window handle to HWND.
+#[inline]
+fn hwnd_from_isize(val: isize) -> HWND {
+    HWND(val as *mut std::ffi::c_void)
+}
+
+/// Central coordinator for window and workspace management.
+///
+/// Manages all monitors, workspaces, and windows. Provides high-level
+/// operations for workspace switching, window movement, and tiling.
 pub struct WorkspaceManager {
     monitors: Vec<Monitor>,
     active_workspace_global: u8, // All monitors share the same active workspace
@@ -24,6 +44,7 @@ pub struct WorkspaceManager {
 }
 
 impl WorkspaceManager {
+    /// Creates a new workspace manager with default state.
     pub fn new() -> Self {
         WorkspaceManager {
             monitors: Vec::new(),
@@ -36,10 +57,12 @@ impl WorkspaceManager {
         }
     }
 
+    /// Sets the status bar instance for workspace indicator updates.
     pub fn set_statusbar(&mut self, statusbar: StatusBar) {
         self.statusbar = Some(statusbar);
     }
 
+    /// Updates the status bar to reflect the current workspace.
     pub fn update_statusbar(&mut self) {
         if let Some(statusbar) = self.statusbar.as_mut() {
             let workspace_num = self.active_workspace_global;
@@ -47,6 +70,7 @@ impl WorkspaceManager {
         }
     }
 
+    /// Shows or hides the status bar.
     pub fn toggle_statusbar(&mut self, visible: bool) {
         self.statusbar_visible = visible;
         if let Some(statusbar) = self.statusbar.as_mut() {
@@ -59,19 +83,13 @@ impl WorkspaceManager {
         }
     }
 
+    /// Toggles the status bar visibility.
     pub fn invert_statusbar_visibility(&mut self) {
         let desired = !self.statusbar_visible;
         self.toggle_statusbar(desired);
     }
 
-    pub fn get_active_workspace_window_count(&self) -> usize {
-        let mut count = 0;
-        for monitor in self.monitors.iter() {
-            count += monitor.get_active_workspace().windows.len();
-        }
-        count
-    }
-
+    /// Updates window decorations (border color, transparency) based on focus state.
     pub fn update_decorations(&mut self) {
         let focused_hwnd = unsafe { GetForegroundWindow() };
 
@@ -122,6 +140,7 @@ impl WorkspaceManager {
             .retain(|hwnd, _| managed_set.contains(hwnd));
     }
 
+    /// Sets the list of monitors for the workspace manager.
     pub fn set_monitors(&mut self, monitors: Vec<Monitor>) {
         println!("DEBUG: Setting {} monitors", monitors.len());
         for (i, monitor) in monitors.iter().enumerate() {
@@ -134,10 +153,12 @@ impl WorkspaceManager {
         println!("DEBUG: Monitors set successfully");
     }
 
+    /// Returns the currently active workspace number (1-9).
     pub fn get_active_workspace(&self) -> u8 {
         self.active_workspace_global
     }
 
+    /// Returns all window handles managed by MegaTile across all workspaces.
     pub fn get_all_managed_hwnds(&self) -> Vec<isize> {
         let mut hwnds = Vec::new();
         for monitor in self.monitors.iter() {
@@ -150,6 +171,7 @@ impl WorkspaceManager {
         hwnds
     }
 
+    /// Determines which monitor a window belongs to.
     pub fn get_monitor_for_window(&self, hwnd: HWND) -> Option<usize> {
         use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 
@@ -176,6 +198,7 @@ impl WorkspaceManager {
         None
     }
 
+    /// Adds a window to the workspace manager.
     pub fn add_window(&mut self, window: Window) {
         println!(
             "DEBUG: Adding window {:?} to workspace {} on monitor {}",
@@ -198,6 +221,7 @@ impl WorkspaceManager {
         }
     }
 
+    /// Removes a window from tracking without re-tiling.
     pub fn remove_window(&mut self, hwnd: HWND) -> Option<Window> {
         println!("DEBUG: Removing window {:?}", hwnd.0);
         self.last_window_alpha.remove(&(hwnd.0 as isize));
@@ -218,6 +242,7 @@ impl WorkspaceManager {
         None
     }
 
+    /// Removes a window and re-tiles the affected workspace.
     pub fn remove_window_with_tiling(&mut self, hwnd: HWND) -> Option<Window> {
         println!("DEBUG: Removing window with tiling update: {:?}", hwnd.0);
         let removed_window = self.remove_window(hwnd);
@@ -240,6 +265,7 @@ impl WorkspaceManager {
         removed_window
     }
 
+    /// Finds a window by handle across all monitors and workspaces.
     pub fn get_window(&self, hwnd: HWND) -> Option<Window> {
         for monitor in self.monitors.iter() {
             if let Some(window) = monitor.get_window(hwnd) {
@@ -249,14 +275,9 @@ impl WorkspaceManager {
         None
     }
 
-    pub fn get_active_workspace_windows(&self, monitor_index: usize) -> Vec<Window> {
-        if let Some(monitor) = self.monitors.get(monitor_index) {
-            monitor.get_active_workspace().windows.clone()
-        } else {
-            Vec::new()
-        }
-    }
-
+    /// Re-enumerates monitors and updates workspace assignments.
+    ///
+    /// Called when monitor configuration changes (hot-plug, resolution change).
     pub fn reenumerate_monitors(&mut self) -> Result<(), String> {
         // Prevent redundant re-enumerations within 500ms
         if self.last_reenumerate.elapsed() < Duration::from_millis(500) {
@@ -301,6 +322,7 @@ impl WorkspaceManager {
         Ok(())
     }
 
+    /// Checks if monitor configuration has changed.
     pub fn check_monitor_changes(&mut self) -> bool {
         let current_infos = crate::windows_lib::enumerate_monitors();
         if current_infos.len() != self.monitors.len() {
@@ -321,6 +343,7 @@ impl WorkspaceManager {
         false
     }
 
+    /// Returns the total window count for a workspace across all monitors.
     pub fn get_workspace_window_count(&self, workspace_num: u8) -> usize {
         let mut count = 0;
         for monitor in self.monitors.iter() {
@@ -331,6 +354,7 @@ impl WorkspaceManager {
         count
     }
 
+    /// Switches to a different workspace, hiding/showing windows as needed.
     pub fn switch_workspace_with_windows(&mut self, new_workspace: u8) -> Result<(), String> {
         if !(1..=9).contains(&new_workspace) {
             println!(
@@ -445,7 +469,7 @@ impl WorkspaceManager {
         for monitor in self.monitors.iter() {
             if let Some(workspace) = monitor.get_workspace(new_workspace) {
                 if let Some(hwnd) = workspace.focused_window_hwnd {
-                    focus_target = Some(HWND(hwnd as _));
+                    focus_target = Some(hwnd_from_isize(hwnd));
                     println!(
                         "DEBUG: Found remembered focus target {:?} for workspace {}",
                         hwnd, new_workspace
@@ -454,7 +478,7 @@ impl WorkspaceManager {
                 }
                 // If no remembered focus, try the first tiled window
                 if let Some(first_window) = workspace.windows.iter().find(|w| w.is_tiled) {
-                    focus_target = Some(HWND(first_window.hwnd as _));
+                    focus_target = Some(hwnd_from_isize(first_window.hwnd));
                     println!(
                         "DEBUG: No remembered focus, using first tiled window {:?} for workspace {}",
                         first_window.hwnd, new_workspace
@@ -481,82 +505,67 @@ impl WorkspaceManager {
         Ok(())
     }
 
+    /// Sets visibility for all windows in a workspace (hide=true or show=false).
+    fn set_workspace_windows_visibility(
+        &self,
+        workspace_num: u8,
+        hide: bool,
+    ) -> Result<(), String> {
+        let action = if hide { "Hiding" } else { "Showing" };
+        println!("DEBUG: {} windows for workspace {}", action, workspace_num);
+
+        let mut success_count = 0;
+        let mut failed_count = 0;
+
+        for (monitor_idx, monitor) in self.monitors.iter().enumerate() {
+            if let Some(workspace) = monitor.get_workspace(workspace_num) {
+                println!(
+                    "DEBUG: Monitor {} has {} windows in workspace {}",
+                    monitor_idx,
+                    workspace.windows.len(),
+                    workspace_num
+                );
+                for window in &workspace.windows {
+                    let hwnd = hwnd_from_isize(window.hwnd);
+                    let result = if hide {
+                        hide_window_from_taskbar(hwnd)
+                    } else {
+                        show_window_in_taskbar(hwnd)
+                    };
+                    match result {
+                        Ok(()) => success_count += 1,
+                        Err(e) => {
+                            eprintln!(
+                                "DEBUG: Failed to {} window {:?}: {}",
+                                action.to_lowercase(),
+                                window.hwnd,
+                                e
+                            );
+                            failed_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        println!(
+            "DEBUG: {} {} windows, {} failed",
+            action, success_count, failed_count
+        );
+        Ok(())
+    }
+
+    /// Hides all windows in a workspace from the taskbar.
     fn hide_workspace_windows(&self, workspace_num: u8) -> Result<(), String> {
-        let mut total_hidden = 0;
-        let mut failed_count = 0;
-
-        println!("DEBUG: Hiding windows for workspace {}", workspace_num);
-
-        for (monitor_idx, monitor) in self.monitors.iter().enumerate() {
-            if let Some(workspace) = monitor.get_workspace(workspace_num) {
-                println!(
-                    "DEBUG: Monitor {} has {} windows in workspace {}",
-                    monitor_idx,
-                    workspace.windows.len(),
-                    workspace_num
-                );
-                for window in &workspace.windows {
-                    println!("DEBUG: Hiding window {:?} from taskbar", window.hwnd);
-                    if let Err(e) = hide_window_from_taskbar(HWND(window.hwnd as _)) {
-                        eprintln!("DEBUG: Failed to hide window {:?}: {}", window.hwnd, e);
-                        failed_count += 1;
-                    } else {
-                        total_hidden += 1;
-                    }
-                }
-            } else {
-                println!(
-                    "DEBUG: Monitor {} has no workspace {}",
-                    monitor_idx, workspace_num
-                );
-            }
-        }
-
-        println!(
-            "DEBUG: Hidden {} windows, {} failed",
-            total_hidden, failed_count
-        );
-        Ok(())
+        self.set_workspace_windows_visibility(workspace_num, true)
     }
 
+    /// Shows all windows in a workspace in the taskbar.
     fn show_workspace_windows(&self, workspace_num: u8) -> Result<(), String> {
-        let mut total_shown = 0;
-        let mut failed_count = 0;
-
-        println!("DEBUG: Showing windows for workspace {}", workspace_num);
-
-        for (monitor_idx, monitor) in self.monitors.iter().enumerate() {
-            if let Some(workspace) = monitor.get_workspace(workspace_num) {
-                println!(
-                    "DEBUG: Monitor {} has {} windows in workspace {}",
-                    monitor_idx,
-                    workspace.windows.len(),
-                    workspace_num
-                );
-                for window in &workspace.windows {
-                    println!("DEBUG: Showing window {:?} in taskbar", window.hwnd);
-                    if let Err(e) = show_window_in_taskbar(HWND(window.hwnd as _)) {
-                        eprintln!("DEBUG: Failed to show window {:?}: {}", window.hwnd, e);
-                        failed_count += 1;
-                    } else {
-                        total_shown += 1;
-                    }
-                }
-            } else {
-                println!(
-                    "DEBUG: Monitor {} has no workspace {}",
-                    monitor_idx, workspace_num
-                );
-            }
-        }
-
-        println!(
-            "DEBUG: Shown {} windows, {} failed",
-            total_shown, failed_count
-        );
-        Ok(())
+        self.set_workspace_windows_visibility(workspace_num, false)
     }
 
+    /// Moves the focused window to another workspace.
     pub fn move_window_to_workspace(&mut self, new_workspace: u8) -> Result<(), String> {
         if !(1..=9).contains(&new_workspace) {
             println!(
@@ -596,7 +605,7 @@ impl WorkspaceManager {
         let mut window_to_move = None;
         let mut source_monitor_idx = 0;
         let mut should_switch = false;
-        let mut result = Err("Window not found".to_string());
+        let mut _result = Err("Window not found".to_string());
 
         println!("DEBUG: Searching for window in monitors to remove");
         for (m_idx, monitor) in self.monitors.iter_mut().enumerate() {
@@ -686,7 +695,7 @@ impl WorkspaceManager {
                                 "DEBUG: Setting position for window {:?} to {:?}",
                                 win.hwnd, win.rect
                             );
-                            self.set_window_position(HWND(win.hwnd as _), &win.rect);
+                            self.set_window_position(hwnd_from_isize(win.hwnd), &win.rect);
                         }
                     }
                 }
@@ -698,10 +707,10 @@ impl WorkspaceManager {
             }
 
             should_switch = true;
-            result = Ok(());
+            _result = Ok(());
         } else {
             println!("DEBUG: Window {:?} not found in any workspace", hwnd.0);
-            result = Err("Window not found".to_string());
+            _result = Err("Window not found".to_string());
         }
 
         if should_switch {
@@ -713,14 +722,10 @@ impl WorkspaceManager {
             println!("DEBUG: Window move to workspace completed successfully");
         }
 
-        result
+        _result
     }
 
-    pub fn move_window_to_workspace_follow(&mut self, new_workspace: u8) -> Result<(), String> {
-        // Move already switches to the target workspace
-        self.move_window_to_workspace(new_workspace)
-    }
-
+    /// Applies tiling layout to all active workspaces on all monitors.
     pub fn tile_active_workspaces(&mut self) {
         let tiler = DwindleTiler::default();
         for monitor in self.monitors.iter_mut() {
@@ -737,18 +742,20 @@ impl WorkspaceManager {
         }
     }
 
+    /// Applies calculated positions to all tiled windows.
     pub fn apply_window_positions(&self) {
         for monitor in self.monitors.iter() {
             let active_workspace = monitor.get_active_workspace();
 
             for window in &active_workspace.windows {
                 if window.is_tiled {
-                    self.set_window_position(HWND(window.hwnd as _), &window.rect);
+                    self.set_window_position(hwnd_from_isize(window.hwnd), &window.rect);
                 }
             }
         }
     }
 
+    /// Toggles a window between tiled and floating state.
     pub fn toggle_window_tiling(&mut self, hwnd: HWND) -> Result<(), String> {
         println!("DEBUG: Toggling tiling for window {:?}", hwnd.0);
         let mut found = false;
@@ -796,6 +803,7 @@ impl WorkspaceManager {
         Ok(())
     }
 
+    /// Sets a window's position and size.
     fn set_window_position(&self, hwnd: HWND, rect: &RECT) {
         unsafe {
             // Restore the window if it's maximized, as SetWindowPos doesn't work on maximized windows
@@ -815,6 +823,7 @@ impl WorkspaceManager {
         }
     }
 
+    /// Returns the currently focused window if it's managed by MegaTile.
     pub fn get_focused_window(&self) -> Option<Window> {
         use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
@@ -824,6 +833,7 @@ impl WorkspaceManager {
         }
     }
 
+    /// Moves focus to the nearest window in the specified direction.
     pub fn move_focus(&mut self, direction: FocusDirection) -> Result<(), String> {
         println!("DEBUG: Moving focus in direction {:?}", direction);
 
@@ -885,6 +895,7 @@ impl WorkspaceManager {
         Ok(())
     }
 
+    /// Finds the next window to focus based on spatial position.
     fn find_next_focus(
         &self,
         focused: &Window,
@@ -957,6 +968,7 @@ impl WorkspaceManager {
             .map(|(w, _)| w.clone())
     }
 
+    /// Sets focus to a specific window.
     pub fn set_window_focus(&mut self, hwnd: HWND) {
         use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -987,6 +999,7 @@ impl WorkspaceManager {
         }
     }
 
+    /// Swaps the focused window with the window in the specified direction.
     pub fn move_window(&mut self, direction: FocusDirection) -> Result<(), String> {
         println!("DEBUG: Moving window in direction {:?}", direction);
 
@@ -1091,6 +1104,7 @@ impl WorkspaceManager {
         Ok(())
     }
 
+    /// Swaps the positions of two windows in the tiling layout.
     fn swap_window_positions(&mut self, hwnd1: HWND, hwnd2: HWND) -> Result<(), String> {
         println!(
             "DEBUG: Swapping positions of windows {:?} and {:?}",
@@ -1172,6 +1186,7 @@ impl WorkspaceManager {
         }
     }
 
+    /// Updates internal tracking when windows are moved externally.
     pub fn update_window_positions(&mut self) {
         // Get monitor rects first
         let monitor_rects: Vec<RECT> = self.monitors.iter().map(|m| m.rect).collect();
@@ -1239,7 +1254,7 @@ impl WorkspaceManager {
 
         // Apply moves
         for (hwnd, _old_monitor_idx, new_monitor_idx) in moves {
-            if let Some(window) = self.remove_window(HWND(hwnd as _))
+            if let Some(window) = self.remove_window(hwnd_from_isize(hwnd))
                 && let Some(new_monitor) = self.monitors.get_mut(new_monitor_idx)
             {
                 let ws_idx = (window.workspace - 1) as usize;
@@ -1260,6 +1275,7 @@ impl WorkspaceManager {
         }
     }
 
+    /// Prints debug information about workspace state.
     pub fn print_workspace_status(&self) {
         for (m_idx, monitor) in self.monitors.iter().enumerate() {
             println!("Monitor {}:", m_idx);
@@ -1277,6 +1293,7 @@ impl WorkspaceManager {
         }
     }
 
+    /// Closes the currently focused window.
     pub fn close_focused_window(&mut self) -> Result<(), String> {
         // Get currently focused window
         let focused = self.get_focused_window();
@@ -1311,7 +1328,7 @@ impl WorkspaceManager {
             if let Some(workspace) = monitor.get_workspace(active_workspace_num)
                 && let Some(hwnd) = workspace.focused_window_hwnd
             {
-                next_focus = Some(HWND(hwnd as _));
+                next_focus = Some(hwnd_from_isize(hwnd));
                 break;
             }
         }
@@ -1328,6 +1345,7 @@ impl WorkspaceManager {
         Ok(())
     }
 
+    /// Toggles fullscreen mode for the focused window.
     pub fn toggle_fullscreen(&mut self) -> Result<(), String> {
         // Get currently focused window
         let focused = self.get_focused_window();
@@ -1336,7 +1354,7 @@ impl WorkspaceManager {
             return Err("No focused window".to_string());
         }
 
-        let focused_hwnd = HWND(focused.unwrap().hwnd as _);
+        let focused_hwnd = hwnd_from_isize(focused.unwrap().hwnd);
         let mut handled = false;
 
         // Find and update the window in workspace
@@ -1378,30 +1396,14 @@ impl WorkspaceManager {
         }
     }
 
-    pub fn exit_fullscreen_all(&mut self) {
-        for monitor in self.monitors.iter_mut() {
-            for workspace in &mut monitor.workspaces {
-                for window in &mut workspace.windows {
-                    if window.is_fullscreen {
-                        crate::windows_lib::restore_window_from_fullscreen(
-                            HWND(window.hwnd as _),
-                            window.original_rect,
-                        )
-                        .ok();
-                        window.is_fullscreen = false;
-                    }
-                }
-            }
-        }
-    }
-
+    /// Exits fullscreen for all windows in a workspace.
     fn exit_fullscreen_workspace(&mut self, workspace_num: u8) {
         for monitor in self.monitors.iter_mut() {
             if let Some(workspace) = monitor.get_workspace_mut(workspace_num) {
                 for window in &mut workspace.windows {
                     if window.is_fullscreen {
                         crate::windows_lib::restore_window_from_fullscreen(
-                            HWND(window.hwnd as _),
+                            hwnd_from_isize(window.hwnd),
                             window.original_rect,
                         )
                         .ok();
@@ -1412,6 +1414,7 @@ impl WorkspaceManager {
         }
     }
 
+    /// Resizes the focused window's tile region by adjusting split ratios.
     pub fn resize_focused_window(
         &mut self,
         direction: ResizeDirection,
@@ -1570,6 +1573,7 @@ impl WorkspaceManager {
         }
     }
 
+    /// Flips the split direction of the region containing the focused window.
     pub fn flip_focused_region(&mut self) -> Result<(), String> {
         let focused = self.get_focused_window();
         if focused.is_none() {
@@ -1625,6 +1629,7 @@ impl WorkspaceManager {
     }
 }
 
+/// Direction for focus and window movement operations.
 #[derive(Debug, Clone, Copy)]
 pub enum FocusDirection {
     Left,
@@ -1633,9 +1638,12 @@ pub enum FocusDirection {
     Down,
 }
 
+/// Direction for window resize operations.
 #[derive(Debug, Clone, Copy)]
 pub enum ResizeDirection {
+    /// Resize horizontally (affects vertical splits).
     Horizontal,
+    /// Resize vertically (affects horizontal splits).
     Vertical,
 }
 

@@ -1,3 +1,28 @@
+//! # MegaTile - A Tiling Window Manager for Windows
+//!
+//! MegaTile is a lightweight tiling window manager designed for Windows 10/11.
+//! It provides automatic window tiling with a dwindle layout algorithm,
+//! multi-monitor support, and workspace management.
+//!
+//! ## Features
+//!
+//! - **Automatic Tiling**: Windows are automatically arranged using a dwindle algorithm
+//! - **Workspaces**: 9 virtual workspaces per monitor
+//! - **Hotkey Support**: Comprehensive keyboard shortcuts for window management
+//! - **Multi-Monitor**: Full support for multiple displays
+//! - **System Tray**: Minimal tray icon for easy access
+//! - **Status Bar**: Visual workspace indicator
+//!
+//! ## Architecture
+//!
+//! - [`windows_lib`] - Windows API abstractions and window management utilities
+//! - [`workspace`] - Core data structures (Window, Workspace, Monitor)
+//! - [`workspace_manager`] - High-level workspace operations and state management
+//! - [`tiling`] - Tiling algorithms and layout calculations
+//! - [`hotkeys`] - Hotkey registration and action mapping
+//! - [`tray`] - System tray integration
+//! - [`statusbar`] - Visual workspace indicator
+
 #![cfg_attr(
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
@@ -28,12 +53,16 @@ use windows_lib::{
 };
 use workspace_manager::WorkspaceManager;
 
+/// Window class name for the hidden message window ("MegaTileMessageWindow" as UTF-16).
 static CLASS_NAME: [u16; 22] = [
     77, 101, 103, 97, 84, 105, 108, 101, 77, 101, 115, 115, 97, 103, 101, 87, 105, 110, 100, 111,
     119, 0,
 ];
+
+/// Window title ("MegaTile" as UTF-16).
 static TITLE: [u16; 9] = [77, 101, 103, 97, 84, 105, 108, 101, 0];
 
+/// Internal events processed by the main event loop.
 #[derive(Debug)]
 enum WindowEvent {
     Hotkey(hotkeys::HotkeyAction),
@@ -46,8 +75,10 @@ enum WindowEvent {
     TrayExit,
 }
 
+/// Global event queue for inter-thread communication.
 static EVENT_QUEUE: OnceLock<Mutex<VecDeque<WindowEvent>>> = OnceLock::new();
 
+/// Pushes an event to the global event queue for processing in the main loop.
 fn push_event(event: WindowEvent) {
     if let Some(queue) = EVENT_QUEUE.get()
         && let Ok(mut q) = queue.lock()
@@ -56,6 +87,10 @@ fn push_event(event: WindowEvent) {
     }
 }
 
+/// Windows accessibility event callback for tracking window changes.
+///
+/// This callback receives notifications about window creation, destruction,
+/// movement, and focus changes from the Windows accessibility API.
 unsafe extern "system" fn win_event_proc(
     _hwin_event_hook: HWINEVENTHOOK,
     event: u32,
@@ -86,6 +121,9 @@ unsafe extern "system" fn win_event_proc(
     }
 }
 
+/// Restores all managed windows to their visible state before exit.
+///
+/// This ensures windows are not left hidden in the taskbar when MegaTile exits.
 fn cleanup_on_exit(wm: &mut WorkspaceManager) {
     println!("Restoring all hidden windows...");
 
@@ -124,6 +162,7 @@ fn cleanup_on_exit(wm: &mut WorkspaceManager) {
     );
 }
 
+/// Dispatches a hotkey action to the workspace manager.
 fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
     match action {
         hotkeys::HotkeyAction::SwitchWorkspace(num) => {
@@ -183,15 +222,6 @@ fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
             }
             Err(e) => eprintln!("Failed to move window: {}", e),
         },
-        hotkeys::HotkeyAction::MoveToWorkspaceFollow(num) => {
-            match wm.move_window_to_workspace_follow(num) {
-                Ok(()) => {
-                    println!("Moved window to workspace {} and followed", num);
-                    wm.print_workspace_status();
-                }
-                Err(e) => eprintln!("Failed to move window: {}", e),
-            }
-        }
         hotkeys::HotkeyAction::ToggleTiling => {
             if let Some(focused) = wm.get_focused_window()
                 && let Err(e) = wm.toggle_window_tiling(HWND(focused.hwnd as _))
@@ -484,6 +514,7 @@ fn main() {
     }
 }
 
+/// Window procedure for the hidden message window.
 extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         if msg == WM_DESTROY {
@@ -493,6 +524,7 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     }
 }
 
+/// Creates a hidden window for receiving hotkey and system messages.
 fn create_message_window() -> Result<HWND, String> {
     unsafe {
         let class_name = PCWSTR(CLASS_NAME.as_ptr());

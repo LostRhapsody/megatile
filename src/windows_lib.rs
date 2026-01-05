@@ -1,11 +1,18 @@
-use std::ptr;
+//! Windows API abstractions and window management utilities.
+//!
+//! This module provides safe wrappers around Windows API calls for:
+//! - Window enumeration and filtering
+//! - Window visibility and taskbar management
+//! - Monitor enumeration
+//! - Window decorations (borders, transparency)
+//! - Window positioning and fullscreen management
+
 use windows::Win32::Foundation::{
     COLORREF, GetLastError, HWND, LPARAM, RECT, SetLastError, TRUE, WIN32_ERROR, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromWindow,
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::BOOL;
@@ -15,15 +22,19 @@ const DWMWA_BORDER_COLOR: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(34);
 const DWMWA_COLOR_DEFAULT: u32 = 0xFFFFFFFF;
 const LWA_ALPHA: LAYERED_WINDOW_ATTRIBUTES_FLAGS = LAYERED_WINDOW_ATTRIBUTES_FLAGS(2);
 
+/// Information about a window retrieved from Windows API.
 pub struct WindowInfo {
     pub hwnd: HWND,
     pub title: String,
     pub class_name: String,
     pub rect: RECT,
+    #[allow(dead_code)]
     pub is_visible: bool,
+    #[allow(dead_code)]
     pub is_minimized: bool,
 }
 
+/// Enumerates all top-level windows on the system.
 pub fn enumerate_windows() -> Vec<WindowInfo> {
     let mut windows = Vec::new();
 
@@ -62,18 +73,21 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL 
     TRUE
 }
 
+/// Gets the title text of a window.
 pub fn get_window_title(hwnd: HWND) -> String {
     let mut title_buffer = [0u16; 256];
     let length = unsafe { GetWindowTextW(hwnd, &mut title_buffer) };
     String::from_utf16_lossy(&title_buffer[..length as usize])
 }
 
+/// Gets the window class name.
 pub fn get_window_class(hwnd: HWND) -> String {
     let mut class_buffer = [0u16; 256];
     let class_len = unsafe { GetClassNameW(hwnd, &mut class_buffer) };
     String::from_utf16_lossy(&class_buffer[..class_len as usize])
 }
 
+/// Checks if a window handle represents a normal, manageable window.
 pub fn is_normal_window_hwnd(hwnd: HWND) -> bool {
     let title = get_window_title(hwnd);
     let class_name = get_window_class(hwnd);
@@ -82,6 +96,10 @@ pub fn is_normal_window_hwnd(hwnd: HWND) -> bool {
     is_normal
 }
 
+/// Determines if a window is a "normal" window that should be managed.
+///
+/// Filters out system windows, tool windows, invisible windows, and other
+/// windows that shouldn't be tiled (taskbar, shell windows, etc.).
 pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
     println!(
         "Checking if window, title {}, class name {}, hwnd {:?}, is 'normal'.",
@@ -158,6 +176,7 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
     }
 }
 
+/// Returns all windows that are suitable for tiling management.
 pub fn get_normal_windows() -> Vec<WindowInfo> {
     enumerate_windows()
         .into_iter()
@@ -165,6 +184,9 @@ pub fn get_normal_windows() -> Vec<WindowInfo> {
         .collect()
 }
 
+/// Hides a window and removes it from the taskbar.
+///
+/// Used when switching away from a workspace to hide its windows.
 pub fn hide_window_from_taskbar(hwnd: HWND) -> Result<(), String> {
     unsafe {
         // Store original window placement
@@ -188,6 +210,9 @@ pub fn hide_window_from_taskbar(hwnd: HWND) -> Result<(), String> {
     }
 }
 
+/// Shows a window and restores it to the taskbar.
+///
+/// Used when switching to a workspace to show its windows.
 pub fn show_window_in_taskbar(hwnd: HWND) -> Result<(), String> {
     unsafe {
         // Restore WS_EX_APPWINDOW to show in taskbar
@@ -212,6 +237,7 @@ pub fn show_window_in_taskbar(hwnd: HWND) -> Result<(), String> {
     }
 }
 
+/// Gets the bounding rectangle of a window.
 pub fn get_window_rect(hwnd: HWND) -> Result<RECT, String> {
     let mut rect = RECT::default();
     unsafe {
@@ -220,16 +246,17 @@ pub fn get_window_rect(hwnd: HWND) -> Result<RECT, String> {
     Ok(rect)
 }
 
-pub fn is_window_hidden(hwnd: HWND) -> bool {
-    unsafe { !IsWindowVisible(hwnd).as_bool() }
-}
-
+/// Information about a display monitor.
 pub struct MonitorInfo {
+    /// Windows HMONITOR handle as isize.
     pub hmonitor: isize,
+    /// Monitor screen bounds.
     pub rect: RECT,
+    /// Whether this is the primary monitor.
     pub is_primary: bool,
 }
 
+/// Enumerates all connected display monitors.
 pub fn enumerate_monitors() -> Vec<MonitorInfo> {
     let mut monitors = Vec::new();
 
@@ -271,6 +298,7 @@ pub fn enumerate_monitors() -> Vec<MonitorInfo> {
     monitors
 }
 
+/// Closes a window gracefully by sending WM_CLOSE.
 pub fn close_window(hwnd: HWND) -> Result<(), String> {
     unsafe {
         // Try to close gracefully by sending WM_CLOSE message
@@ -280,14 +308,7 @@ pub fn close_window(hwnd: HWND) -> Result<(), String> {
     }
 }
 
-pub fn force_close_window(hwnd: HWND) -> Result<(), String> {
-    unsafe {
-        // Force terminate the window
-        DestroyWindow(hwnd).map_err(|e| format!("Failed to destroy window: {}", e))?;
-        Ok(())
-    }
-}
-
+/// Sets a window to fullscreen mode covering the specified monitor.
 pub fn set_window_fullscreen(hwnd: HWND, monitor_rect: RECT) -> Result<(), String> {
     unsafe {
         // Set window to fullscreen
@@ -306,6 +327,7 @@ pub fn set_window_fullscreen(hwnd: HWND, monitor_rect: RECT) -> Result<(), Strin
     }
 }
 
+/// Restores a window from fullscreen to its original position.
 pub fn restore_window_from_fullscreen(hwnd: HWND, original_rect: RECT) -> Result<(), String> {
     unsafe {
         // Restore original position and size
@@ -321,23 +343,6 @@ pub fn restore_window_from_fullscreen(hwnd: HWND, original_rect: RECT) -> Result
         .map_err(|e| format!("Failed to restore window from fullscreen: {}", e))?;
 
         Ok(())
-    }
-}
-
-pub fn get_monitor_rect(hwnd: HWND) -> Option<RECT> {
-    unsafe {
-        let mut monitor_info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-
-        let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-
-        if GetMonitorInfoW(hmonitor, &mut monitor_info).as_bool() {
-            Some(monitor_info.rcMonitor)
-        } else {
-            None
-        }
     }
 }
 
@@ -424,6 +429,7 @@ pub fn set_window_transparency(hwnd: HWND, alpha: u8) -> Result<(), String> {
     Ok(())
 }
 
+/// Resets window decorations to default (removes custom border color and transparency).
 pub fn reset_window_decorations(hwnd: HWND) -> Result<(), String> {
     set_window_border_color(hwnd, DWMWA_COLOR_DEFAULT)?;
     set_window_transparency(hwnd, 255)?;
