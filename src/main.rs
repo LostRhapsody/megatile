@@ -29,6 +29,7 @@
 )]
 
 mod hotkeys;
+mod logging;
 mod statusbar;
 mod tiling;
 mod tray;
@@ -45,6 +46,8 @@ use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::PCWSTR;
 
+use log::{debug, error, info};
+
 use hotkeys::HotkeyManager;
 use statusbar::{
     STATUSBAR_HEIGHT, STATUSBAR_TOP_GAP, STATUSBAR_WIDTH, StatusBar, init_gdiplus, shutdown_gdiplus,
@@ -54,6 +57,30 @@ use windows_lib::{
     enumerate_monitors, get_normal_windows, reset_window_decorations, show_window_in_taskbar,
 };
 use workspace_manager::WorkspaceManager;
+
+use argh::FromArgs;
+use logging::LogLevel;
+
+/// Megatile - A Tiling Window Manager for Windows
+#[derive(FromArgs, Debug)]
+struct Args {
+    /// set log level to debug (most verbose)
+    #[argh(switch, short = 'd')]
+    debug: bool,
+
+    /// set log level to info
+    #[argh(switch, short = 'i')]
+    info: bool,
+
+    /// set log level to warning
+    #[argh(switch, short = 'w')]
+    warning: bool,
+
+    #[allow(dead_code)]
+    /// set log level to error (default, least verbose)
+    #[argh(switch, short = 'e')]
+    error: bool,
+}
 
 /// Window class name for the hidden message window ("MegatileMessageWindow" as UTF-16).
 static CLASS_NAME: [u16; 22] = [
@@ -135,17 +162,17 @@ unsafe extern "system" fn win_event_proc(
 ///
 /// This ensures windows are not left hidden in the taskbar when Megatile exits.
 fn cleanup_on_exit(wm: &mut WorkspaceManager) {
-    println!("Restoring all hidden windows...");
+    info!("Restoring all hidden windows...");
 
     // Get all managed windows from all workspaces
     let all_hwnds = wm.get_all_managed_hwnds();
-    println!("Found {} managed windows to restore", all_hwnds.len());
+    debug!("Found {} managed windows to restore", all_hwnds.len());
 
     let normal_windows = get_normal_windows();
-    println!("Found {} normal windows to restore", normal_windows.len());
+    debug!("Found {} normal windows to restore", normal_windows.len());
     for window_info in normal_windows {
-        println!(
-            "  - {} (Class: {})",
+        debug!(
+            "Window: {} (Class: {})",
             window_info.title, window_info.class_name
         );
     }
@@ -160,22 +187,19 @@ fn cleanup_on_exit(wm: &mut WorkspaceManager) {
         match show_window_in_taskbar(hwnd_handle) {
             Ok(()) => {
                 restored_count += 1;
-                println!("  ✓ Restored window {:?}", hwnd);
+                debug!("Restored window {:?}", hwnd);
             }
             Err(e) => {
                 failed_count += 1;
-                eprintln!("  ✗ Failed to restore window {:?}: {}", hwnd, e);
+                error!("Failed to restore window {:?}: {}", hwnd, e);
             }
         }
         if let Err(e) = reset_window_decorations(hwnd_handle) {
-            eprintln!(
-                "  ✗ Failed to reset window decorations for {:?}: {}",
-                hwnd, e
-            );
+            error!("Failed to reset window decorations for {:?}: {}", hwnd, e);
         }
     }
 
-    println!(
+    info!(
         "Window restoration complete: {} restored, {} failed",
         restored_count, failed_count
     );
@@ -187,136 +211,153 @@ fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
         hotkeys::HotkeyAction::SwitchWorkspace(num) => {
             match wm.switch_workspace_with_windows(num) {
                 Ok(()) => {
-                    println!("Switched to workspace {}", num);
+                    info!("Switched to workspace {}", num);
                     wm.tile_active_workspaces();
                     wm.apply_window_positions();
                 }
-                Err(e) => eprintln!("Failed to switch workspace: {}", e),
+                Err(e) => error!("Failed to switch workspace: {}", e),
             }
         }
         hotkeys::HotkeyAction::MoveLeft => {
             if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Left) {
-                eprintln!("Failed to move window: {}", e);
+                error!("Failed to move window: {}", e);
             }
         }
         hotkeys::HotkeyAction::MoveRight => {
             if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Right) {
-                eprintln!("Failed to move window: {}", e);
+                error!("Failed to move window: {}", e);
             }
         }
         hotkeys::HotkeyAction::FocusLeft => {
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Left) {
-                eprintln!("Failed to move focus: {}", e);
+                error!("Failed to move focus: {}", e);
             }
         }
         hotkeys::HotkeyAction::FocusRight => {
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Right) {
-                eprintln!("Failed to move focus: {}", e);
+                error!("Failed to move focus: {}", e);
             }
         }
         hotkeys::HotkeyAction::FocusUp => {
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Up) {
-                eprintln!("Failed to move focus: {}", e);
+                error!("Failed to move focus: {}", e);
             }
         }
         hotkeys::HotkeyAction::FocusDown => {
             if let Err(e) = wm.move_focus(workspace_manager::FocusDirection::Down) {
-                eprintln!("Failed to move focus: {}", e);
+                error!("Failed to move focus: {}", e);
             }
         }
         hotkeys::HotkeyAction::MoveUp => {
             if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Up) {
-                eprintln!("Failed to move window: {}", e);
+                error!("Failed to move window: {}", e);
             }
         }
         hotkeys::HotkeyAction::MoveDown => {
             if let Err(e) = wm.move_window(workspace_manager::FocusDirection::Down) {
-                eprintln!("Failed to move window: {}", e);
+                error!("Failed to move window: {}", e);
             }
         }
         hotkeys::HotkeyAction::MoveToWorkspace(num) => match wm.move_window_to_workspace(num) {
             Ok(()) => {
-                println!("Moved window to workspace {}", num);
+                info!("Moved window to workspace {}", num);
                 wm.print_workspace_status();
             }
-            Err(e) => eprintln!("Failed to move window: {}", e),
+            Err(e) => error!("Failed to move window: {}", e),
         },
         hotkeys::HotkeyAction::ToggleTiling => {
             if let Some(focused) = wm.get_focused_window()
                 && let Err(e) = wm.toggle_window_tiling(HWND(focused.hwnd as _))
             {
-                eprintln!("Failed to toggle tiling: {}", e);
+                error!("Failed to toggle tiling: {}", e);
             }
         }
         hotkeys::HotkeyAction::ToggleFullscreen => match wm.toggle_fullscreen() {
-            Ok(()) => println!("Fullscreen toggled"),
-            Err(e) => eprintln!("Failed to toggle fullscreen: {}", e),
+            Ok(()) => info!("Fullscreen toggled"),
+            Err(e) => error!("Failed to toggle fullscreen: {}", e),
         },
         hotkeys::HotkeyAction::ResizeHorizontalIncrease => {
             if let Err(e) =
                 wm.resize_focused_window(workspace_manager::ResizeDirection::Horizontal, 0.05)
             {
-                eprintln!("Failed to resize window: {}", e);
+                error!("Failed to resize window: {}", e);
             }
         }
         hotkeys::HotkeyAction::ResizeHorizontalDecrease => {
             if let Err(e) =
                 wm.resize_focused_window(workspace_manager::ResizeDirection::Horizontal, -0.05)
             {
-                eprintln!("Failed to resize window: {}", e);
+                error!("Failed to resize window: {}", e);
             }
         }
         hotkeys::HotkeyAction::ResizeVerticalIncrease => {
             if let Err(e) =
                 wm.resize_focused_window(workspace_manager::ResizeDirection::Vertical, 0.05)
             {
-                eprintln!("Failed to resize window: {}", e);
+                error!("Failed to resize window: {}", e);
             }
         }
         hotkeys::HotkeyAction::ResizeVerticalDecrease => {
             if let Err(e) =
                 wm.resize_focused_window(workspace_manager::ResizeDirection::Vertical, -0.05)
             {
-                eprintln!("Failed to resize window: {}", e);
+                error!("Failed to resize window: {}", e);
             }
         }
         hotkeys::HotkeyAction::FlipRegion => {
             if let Err(e) = wm.flip_focused_region() {
-                eprintln!("Failed to flip region: {}", e);
+                error!("Failed to flip region: {}", e);
             }
         }
         hotkeys::HotkeyAction::CloseWindow => match wm.close_focused_window() {
-            Ok(()) => println!("Window closed successfully"),
-            Err(e) => eprintln!("Failed to close window: {}", e),
+            Ok(()) => info!("Window closed successfully"),
+            Err(e) => error!("Failed to close window: {}", e),
         },
         hotkeys::HotkeyAction::ToggleStatusBar => {
             wm.invert_statusbar_visibility();
         }
         hotkeys::HotkeyAction::MoveToMonitorLeft => {
             if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Left) {
-                eprintln!("Failed to move window to monitor: {}", e);
+                error!("Failed to move window to monitor: {}", e);
             }
         }
         hotkeys::HotkeyAction::MoveToMonitorRight => {
             if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Right) {
-                eprintln!("Failed to move window to monitor: {}", e);
+                error!("Failed to move window to monitor: {}", e);
             }
         }
         hotkeys::HotkeyAction::MoveToMonitorUp => {
             if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Up) {
-                eprintln!("Failed to move window to monitor: {}", e);
+                error!("Failed to move window to monitor: {}", e);
             }
         }
         hotkeys::HotkeyAction::MoveToMonitorDown => {
             if let Err(e) = wm.move_window_to_monitor(workspace_manager::FocusDirection::Down) {
-                eprintln!("Failed to move window to monitor: {}", e);
+                error!("Failed to move window to monitor: {}", e);
             }
         }
     }
 }
 
 fn main() {
-    println!("Megatile - Window Manager");
+    // Parse CLI arguments
+    let args: Args = argh::from_env();
+
+    // Determine log level from CLI flags (default to Error if none specified)
+    let log_level = if args.debug {
+        LogLevel::Debug
+    } else if args.info {
+        LogLevel::Info
+    } else if args.warning {
+        LogLevel::Warning
+    } else {
+        LogLevel::Error
+    };
+
+    // Initialize logging (must be done before any log macros)
+    let _logger_handle = logging::init_logging(log_level).expect("Failed to initialize logging");
+
+    log::info!("Megatile - Window Manager");
 
     // Initialize event queue
     EVENT_QUEUE.set(Mutex::new(VecDeque::new())).unwrap();
@@ -326,20 +367,20 @@ fn main() {
 
     // Setup Ctrl+C handler for cleanup
     ctrlc::set_handler(move || {
-        println!("\nReceived Ctrl+C signal, pushing exit event...");
+        info!("\nReceived Ctrl+C signal, pushing exit event...");
         push_event(WindowEvent::TrayExit);
     })
     .expect("Error setting Ctrl+C handler");
 
     // Enumerate monitors and create monitor structs
     let monitor_infos = enumerate_monitors();
-    println!("Found {} monitor(s):", monitor_infos.len());
+    info!("Found {} monitor(s)", monitor_infos.len());
 
     let monitors: Vec<workspace::Monitor> = monitor_infos
         .iter()
         .enumerate()
         .map(|(i, info)| {
-            println!("  Monitor {}: {:?}", i + 1, info.rect);
+            debug!("Monitor {}: {:?}", i + 1, info.rect);
             workspace::Monitor::new(info.hmonitor, info.rect)
         })
         .collect();
@@ -348,12 +389,12 @@ fn main() {
 
     // Enumerate windows and assign to workspace 1
     let normal_windows = get_normal_windows();
-    println!("Found {} normal windows:", normal_windows.len());
+    info!("Found {} normal windows", normal_windows.len());
 
     let focused_hwnd = unsafe { GetForegroundWindow() };
     for window_info in normal_windows {
-        println!(
-            "  - {} (Class: {})",
+        debug!(
+            "Window: {} (Class: {})",
             window_info.title, window_info.class_name
         );
         let is_focused = window_info.hwnd == focused_hwnd;
@@ -370,12 +411,12 @@ fn main() {
         wm.add_window(window);
     }
 
-    println!("Assigned all windows to workspace 1");
+    info!("Assigned all windows to workspace 1");
 
     // Apply initial tiling
     wm.tile_active_workspaces();
     wm.apply_window_positions();
-    println!("Applied initial tiling to workspace 1");
+    info!("Applied initial tiling to workspace 1");
 
     // Setup window event hooks
     let _event_hook = unsafe {
@@ -438,7 +479,7 @@ fn main() {
     wm.update_statusbar();
     wm.update_decorations();
 
-    println!("Megatile is running. Use the tray icon to exit.");
+    info!("Megatile is running. Use the tray icon to exit.");
 
     let mut last_periodic_check = Instant::now();
     let periodic_check_interval = Duration::from_millis(100);
@@ -502,7 +543,7 @@ fn main() {
 
                         // Use is_normal_window_hwnd which is more efficient
                         if windows_lib::is_normal_window_hwnd(hwnd) {
-                            println!("Event: Window Registered {:?}", hwnd);
+                            info!("Event: Window Registered {:?}", hwnd);
                             let info = windows_lib::WindowInfo {
                                 hwnd,
                                 title: windows_lib::get_window_title(hwnd),
@@ -528,17 +569,17 @@ fn main() {
                     }
                     WindowEvent::WindowDestroyed(hwnd_val) => {
                         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
-                        println!("Event: Window Destroyed {:?}", hwnd);
+                        info!("Event: Window Destroyed {:?}", hwnd);
                         wm.remove_window_with_tiling(hwnd);
                     }
                     WindowEvent::WindowMinimized(hwnd_val) => {
                         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
-                        println!("Event: Window Minimized {:?}", hwnd);
+                        info!("Event: Window Minimized {:?}", hwnd);
                         wm.handle_window_minimized(hwnd);
                     }
                     WindowEvent::WindowRestored(hwnd_val) => {
                         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
-                        println!("Event: Window Restored {:?}", hwnd);
+                        info!("Event: Window Restored {:?}", hwnd);
                         wm.handle_window_restored(hwnd);
                     }
                     WindowEvent::WindowMoved(hwnd_val) => {
@@ -552,9 +593,9 @@ fn main() {
                         wm.update_decorations();
                     }
                     WindowEvent::DisplayChange => {
-                        println!("Event: Display Change");
+                        info!("Event: Display Change");
                         if let Err(e) = wm.reenumerate_monitors() {
-                            eprintln!("Failed to reenumerate monitors: {}", e);
+                            error!("Failed to reenumerate monitors: {}", e);
                         }
                     }
                     WindowEvent::PeriodicCheck => {
@@ -563,14 +604,14 @@ fn main() {
                         wm.update_decorations();
                         wm.cleanup_minimized_windows();
                         if wm.check_monitor_changes() {
-                            println!("Monitor change detected by periodic check");
+                            info!("Monitor change detected by periodic check");
                             if let Err(e) = wm.reenumerate_monitors() {
-                                eprintln!("Failed to reenumerate monitors: {}", e);
+                                error!("Failed to reenumerate monitors: {}", e);
                             }
                         }
                     }
                     WindowEvent::TrayExit => {
-                        println!("Exiting Megatile...");
+                        info!("Exiting Megatile...");
                         cleanup_on_exit(&mut wm);
                         hotkey_manager.unregister_all(hwnd);
                         shutdown_gdiplus();

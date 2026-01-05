@@ -87,12 +87,14 @@ pub fn get_window_class(hwnd: HWND) -> String {
     String::from_utf16_lossy(&class_buffer[..class_len as usize])
 }
 
+use log::debug;
+
 /// Checks if a window handle represents a normal, manageable window.
 pub fn is_normal_window_hwnd(hwnd: HWND) -> bool {
     let title = get_window_title(hwnd);
     let class_name = get_window_class(hwnd);
     let is_normal = is_normal_window(hwnd, &class_name, &title);
-    println!("is normal? {}", is_normal);
+    debug!("is normal? {}", is_normal);
     is_normal
 }
 
@@ -101,7 +103,7 @@ pub fn is_normal_window_hwnd(hwnd: HWND) -> bool {
 /// Filters out system windows, tool windows, invisible windows, popups,
 /// dialogs, and other windows that shouldn't be tiled (taskbar, shell windows, etc.).
 pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
-    println!(
+    debug!(
         "Checking if window, title {}, class name {}, hwnd {:?}, is 'normal'.",
         title, class_name, hwnd
     );
@@ -118,7 +120,7 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
 
         // Verify the window handle is still valid
         if !IsWindow(Some(hwnd)).as_bool() {
-            println!("Filtered: invalid window handle");
+            debug!("Filtered: invalid window handle");
             return false;
         }
 
@@ -138,14 +140,14 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
         ];
         for filtered_title in &filtered_titles {
             if title == *filtered_title {
-                println!("Filtered: problematic title {}", title);
+                debug!("Filtered: problematic title {}", title);
                 return false;
             }
         }
 
         // Filter empty titles (often system windows)
         if title.is_empty() {
-            println!("Filtered: empty title");
+            debug!("Filtered: empty title");
             return false;
         }
 
@@ -158,7 +160,7 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
             std::mem::size_of::<u32>() as u32,
         );
         if cloaked != 0 {
-            println!("Filtered: cloaked window");
+            debug!("Filtered: cloaked window");
             return false;
         }
 
@@ -167,19 +169,19 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
 
         // Filter tool windows
         if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
-            println!("Filtered: tool window");
+            debug!("Filtered: tool window");
             return false;
         }
 
         // Filter non-activatable windows
         if ex_style & WS_EX_NOACTIVATE.0 != 0 {
-            println!("Filtered: non-activatable");
+            debug!("Filtered: non-activatable");
             return false;
         }
 
         // Filter dialog modal frame windows (explicit dialogs)
         if ex_style & WS_EX_DLGMODALFRAME.0 != 0 {
-            println!("Filtered: dialog modal frame");
+            debug!("Filtered: dialog modal frame");
             return false;
         }
 
@@ -197,7 +199,7 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
             .is_ok()
                 && alpha == 0
             {
-                println!("Filtered: fully transparent layered window");
+                debug!("Filtered: fully transparent layered window");
                 return false;
             }
         }
@@ -205,7 +207,7 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
         // Filter owned windows (typically dialogs)
         let owner = GetWindow(hwnd, GW_OWNER);
         if owner.is_ok() && !owner.unwrap().0.is_null() {
-            println!("Filtered: owned window (dialog)");
+            debug!("Filtered: owned window (dialog)");
             return false;
         }
 
@@ -217,24 +219,24 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
 
             // Filter windows smaller than 100x100 (likely tooltips, popups)
             if width < 100 || height < 100 {
-                println!("Filtered: too small ({}x{})", width, height);
+                debug!("Filtered: too small ({}x{})", width, height);
                 return false;
             }
 
             // Filter zero-size windows
             if width <= 0 || height <= 0 {
-                println!("Filtered: zero size");
+                debug!("Filtered: zero size");
                 return false;
             }
 
             // Filter windows positioned entirely off-screen (likely hidden)
             // This helps filter ghost windows
             if rect.right < -1000 || rect.bottom < -1000 || rect.left > 10000 || rect.top > 10000 {
-                println!("Filtered: positioned off-screen");
+                debug!("Filtered: positioned off-screen");
                 return false;
             }
         } else {
-            println!("Filtered: couldn't get window rect");
+            debug!("Filtered: couldn't get window rect");
             return false;
         }
 
@@ -245,7 +247,7 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
 
         // A popup without thick frame and without app window style is likely a dialog
         if is_popup && !has_thick_frame && (ex_style & WS_EX_APPWINDOW.0 == 0) {
-            println!("Filtered: popup without thick frame");
+            debug!("Filtered: popup without thick frame");
             return false;
         }
 
@@ -276,36 +278,36 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
 
         for sys_class in &system_classes {
             if class_name.eq_ignore_ascii_case(sys_class) {
-                println!("Filtered: system class {}", sys_class);
+                debug!("Filtered: system class {}", sys_class);
                 return false;
             }
         }
 
         // Accept windows with WS_EX_APPWINDOW (explicitly meant for taskbar)
         if ex_style & WS_EX_APPWINDOW.0 != 0 {
-            println!("Is normal, case 1: WS_EX_APPWINDOW");
+            debug!("Is normal, case 1: WS_EX_APPWINDOW");
             return true;
         }
 
         // Accept windows with a title that have both caption and thick frame (resizable)
         if has_caption && has_thick_frame {
-            println!("Is normal, case 2: titled with caption and thick frame");
+            debug!("Is normal, case 2: titled with caption and thick frame");
             return true;
         }
 
         // Accept windows with a title and overlapped style (standard app window)
         if style & WS_OVERLAPPEDWINDOW.0 != 0 {
-            println!("Is normal, case 3: titled with overlapped window style");
+            debug!("Is normal, case 3: titled with overlapped window style");
             return true;
         }
 
         // Accept captioned windows
         if has_caption {
-            println!("Is normal, case 4: has caption");
+            debug!("Is normal, case 4: has caption");
             return true;
         }
 
-        println!("Filtered: doesn't match any normal window criteria");
+        debug!("Filtered: doesn't match any normal window criteria");
         false
     }
 }

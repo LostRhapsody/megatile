@@ -3,6 +3,7 @@
 //! This module handles registering system-wide hotkeys with Windows
 //! and mapping them to [`HotkeyAction`] values for the window manager.
 
+use log::debug;
 use std::collections::HashMap;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -178,11 +179,11 @@ impl HotkeyManager {
 
         for (modifiers, vk, id, action) in hotkeys {
             unsafe {
-                println!("Registering hotkey: vk={}, id={}", vk.0, id);
+                debug!("Registering hotkey: vk={}, id={}", vk.0, id);
                 match RegisterHotKey(Some(hwnd), id, modifiers, vk.0 as u32) {
                     Ok(()) => {
                         self.registered_hotkeys.insert(id, action);
-                        println!("Registered hotkey: {:?} (ID: {})", action, id);
+                        debug!("Registered hotkey: {:?} (ID: {})", action, id);
                     }
                     Err(e) => {
                         return Err(format!(

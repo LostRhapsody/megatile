@@ -6,6 +6,7 @@
 
 use crate::statusbar::STATUSBAR_VERTICAL_RESERVE;
 use crate::workspace::{Monitor, Window};
+use log::debug;
 use windows::Win32::Foundation::RECT;
 
 /// Direction of a tile split.
@@ -72,22 +73,24 @@ impl DwindleTiler {
         layout_tree: &mut Option<crate::tiling::Tile>,
         windows: &mut [Window],
     ) {
+        use log::debug;
+
         let active_workspace = monitor.get_active_workspace();
-        println!(
-            "DEBUG: Tiling active workspace: {:?} on monitor with rect {:?}",
+        debug!(
+            "Tiling active workspace: {:?} on monitor with rect {:?}",
             active_workspace, monitor.rect
         );
         let window_count = active_workspace.window_count();
-        println!("DEBUG: Window count in workspace: {}", window_count);
+        debug!("Window count in workspace: {}", window_count);
 
         if window_count == 0 {
-            println!("DEBUG: No windows to tile, returning");
+            debug!("No windows to tile, returning");
             return;
         }
 
         // Get monitor work area (usable space)
         let work_rect = self.get_work_area(monitor);
-        println!("DEBUG: Work area rect: {:?}", work_rect);
+        debug!("Work area rect: {:?}", work_rect);
 
         // Check if we can reuse existing layout_tree
         let tiled_windows: Vec<_> = windows
@@ -99,37 +102,34 @@ impl DwindleTiler {
         if let Some(existing_tree) = layout_tree.as_ref()
             && self.can_reuse_layout(existing_tree, &tiled_windows)
         {
-            println!("DEBUG: Reusing existing layout tree");
+            debug!("Reusing existing layout tree");
             let mut updated_tree = existing_tree.clone();
             updated_tree.rect = work_rect;
             self.update_tree_rects(&mut updated_tree);
             self.apply_tile_positions(&updated_tree, windows);
-            println!("DEBUG: Applied positions from existing layout");
+            debug!("Applied positions from existing layout");
             return;
         }
 
         // Create new layout tree
-        println!("DEBUG: Creating new layout tree");
+        debug!("Creating new layout tree");
         let mut root_tile = Tile::new(work_rect);
-        println!("DEBUG: Created initial root tile with rect {:?}", work_rect);
+        debug!("Created initial root tile with rect {:?}", work_rect);
 
         // Distribute windows across tiles using Dwindle algorithm
-        println!("DEBUG: Starting window distribution across tiles");
+        debug!("Starting window distribution across tiles");
         self.distribute_windows(&mut root_tile, windows);
 
-        println!("DEBUG: Window distribution completed");
+        debug!("Window distribution completed");
 
         // Store the layout tree for future reuse
         *layout_tree = Some(root_tile.clone());
 
         // Apply tile positions to windows
-        println!("DEBUG: Applying calculated tile positions to windows");
+        debug!("Applying calculated tile positions to windows");
         self.apply_tile_positions(&root_tile, windows);
 
-        println!(
-            "DEBUG: Tile positioning completed for {} windows",
-            window_count
-        );
+        debug!("Tile positioning completed for {} windows", window_count);
     }
 
     /// Calculates the usable work area for tiling on a monitor.
@@ -157,58 +157,49 @@ impl DwindleTiler {
             .map(|w| w.hwnd)
             .collect();
 
-        println!(
-            "DEBUG: Distributing {} windows across tiles",
-            window_hwnds.len()
-        );
-        println!("DEBUG: Window hwnds to distribute: {:?}", window_hwnds);
+        debug!("Distributing {} windows across tiles", window_hwnds.len());
+        debug!("Window hwnds to distribute: {:?}", window_hwnds);
 
         if window_hwnds.is_empty() {
-            println!("DEBUG: No active windows to distribute");
+            debug!("No active windows to distribute");
             return;
         }
 
         // Assign all windows to root tile initially
         tile.windows = window_hwnds;
-        println!(
-            "DEBUG: Assigned all {} windows to root tile",
-            tile.windows.len()
-        );
+        debug!("Assigned all {} windows to root tile", tile.windows.len());
 
         // Recursively split tiles
-        println!(
-            "DEBUG: Starting recursive tile splitting for {} windows",
+        debug!(
+            "Starting recursive tile splitting for {} windows",
             tile.windows.len()
         );
         self.split_tile(tile, tile.windows.len());
-        println!("DEBUG: Recursive tile splitting completed");
+        debug!("Recursive tile splitting completed");
     }
 
     /// Recursively splits a tile based on window count and aspect ratio.
     fn split_tile(&self, tile: &mut Tile, window_count: usize) {
-        println!(
-            "DEBUG: Splitting tile with {} windows, rect {:?}",
+        debug!(
+            "Splitting tile with {} windows, rect {:?}",
             window_count, tile.rect
         );
 
         if window_count <= 1 {
-            println!(
-                "DEBUG: Tile has {} windows, no splitting needed",
-                window_count
-            );
+            debug!("Tile has {} windows, no splitting needed", window_count);
             return;
         }
 
         // Determine split direction
         let tile_width = tile.rect.right - tile.rect.left;
         let tile_height = tile.rect.bottom - tile.rect.top;
-        println!("DEBUG: Tile dimensions: {}x{}", tile_width, tile_height);
+        debug!("Tile dimensions: {}x{}", tile_width, tile_height);
 
         let split_direction = if tile_width > tile_height {
-            println!("DEBUG: Splitting vertically (width > height)");
+            debug!("Splitting vertically (width > height)");
             SplitDirection::Vertical
         } else {
-            println!("DEBUG: Splitting horizontally (height >= width)");
+            debug!("Splitting horizontally (height >= width)");
             SplitDirection::Horizontal
         };
 
@@ -219,8 +210,8 @@ impl DwindleTiler {
         let left_windows = tile.windows[..split_point].to_vec();
         let right_windows = tile.windows[split_point..].to_vec();
 
-        println!(
-            "DEBUG: Splitting {} windows at point {}: left gets {}, right gets {}",
+        debug!(
+            "Splitting {} windows at point {}: left gets {}, right gets {}",
             window_count,
             split_point,
             left_windows.len(),
@@ -230,10 +221,7 @@ impl DwindleTiler {
         // Create child tiles
         let (left_rect, right_rect) =
             self.split_rect(&tile.rect, split_direction, tile.split_ratio);
-        println!(
-            "DEBUG: Split rects: left={:?}, right={:?}",
-            left_rect, right_rect
-        );
+        debug!("Split rects: left={:?}, right={:?}", left_rect, right_rect);
 
         let mut left_tile = Tile::new(left_rect);
         left_tile.windows = left_windows;
@@ -245,32 +233,26 @@ impl DwindleTiler {
         let left_count = left_tile.windows.len();
         let right_count = right_tile.windows.len();
 
-        println!(
-            "DEBUG: Processing left child tile with {} windows",
-            left_count
-        );
+        debug!("Processing left child tile with {} windows", left_count);
         if left_count > 0 {
             self.split_tile(&mut left_tile, left_count);
         }
 
-        println!(
-            "DEBUG: Processing right child tile with {} windows",
-            right_count
-        );
+        debug!("Processing right child tile with {} windows", right_count);
         if right_count > 0 {
             self.split_tile(&mut right_tile, right_count);
         }
 
         tile.children = Some(Box::new((left_tile, right_tile)));
-        println!("DEBUG: Tile splitting completed for this level");
+        debug!("Tile splitting completed for this level");
     }
 
     /// Splits a rectangle into two parts based on direction and ratio.
     fn split_rect(&self, rect: &RECT, direction: SplitDirection, ratio: f32) -> (RECT, RECT) {
         let gap = self.gap;
         let mid_gap = gap / 2;
-        println!(
-            "DEBUG: Splitting rect {:?} in direction {:?} with gap {}",
+        debug!(
+            "Splitting rect {:?} in direction {:?} with gap {}",
             rect, direction, gap
         );
 
@@ -278,8 +260,8 @@ impl DwindleTiler {
             SplitDirection::Horizontal => {
                 let height = rect.bottom - rect.top;
                 let split = rect.top + (height as f32 * ratio) as i32 - mid_gap;
-                println!(
-                    "DEBUG: Horizontal split: height={}, ratio={}, split_point={}",
+                debug!(
+                    "Horizontal split: height={}, ratio={}, split_point={}",
                     height, ratio, split
                 );
 
@@ -289,8 +271,8 @@ impl DwindleTiler {
                 let mut right = *rect;
                 right.top = split + gap;
 
-                println!(
-                    "DEBUG: Horizontal split results: left={:?}, right={:?}",
+                debug!(
+                    "Horizontal split results: left={:?}, right={:?}",
                     left, right
                 );
                 (left, right)
@@ -298,8 +280,8 @@ impl DwindleTiler {
             SplitDirection::Vertical => {
                 let width = rect.right - rect.left;
                 let split = rect.left + (width as f32 * ratio) as i32 - mid_gap;
-                println!(
-                    "DEBUG: Vertical split: width={}, ratio={}, split_point={}",
+                debug!(
+                    "Vertical split: width={}, ratio={}, split_point={}",
                     width, ratio, split
                 );
 
@@ -309,10 +291,7 @@ impl DwindleTiler {
                 let mut right = *rect;
                 right.left = split + gap;
 
-                println!(
-                    "DEBUG: Vertical split results: left={:?}, right={:?}",
-                    left, right
-                );
+                debug!("Vertical split results: left={:?}, right={:?}", left, right);
                 (left, right)
             }
         }
@@ -360,32 +339,32 @@ impl DwindleTiler {
     /// Applies tile rectangles to window positions.
     fn apply_tile_positions(&self, tile: &Tile, windows: &mut [Window]) {
         if tile.is_leaf() {
-            println!(
-                "DEBUG: Applying positions to leaf tile with {} windows, rect {:?}",
+            debug!(
+                "Applying positions to leaf tile with {} windows, rect {:?}",
                 tile.windows.len(),
                 tile.rect
             );
             // Apply tile rect to all windows in this tile
             for &window_hwnd in &tile.windows {
                 if let Some(window) = windows.iter_mut().find(|w| w.hwnd == window_hwnd) {
-                    println!(
-                        "DEBUG: Setting window hwnd={:?} to rect {:?}",
+                    debug!(
+                        "Setting window hwnd={:?} to rect {:?}",
                         window_hwnd, tile.rect
                     );
                     window.rect = tile.rect;
                 } else {
-                    println!(
-                        "DEBUG: Warning: window hwnd {:?} not found in windows list",
+                    debug!(
+                        "Warning: window hwnd {:?} not found in windows list",
                         window_hwnd
                     );
                 }
             }
         } else if let Some(ref children) = tile.children {
-            println!("DEBUG: Recursing into child tiles");
+            debug!("Recursing into child tiles");
             self.apply_tile_positions(&children.0, windows);
             self.apply_tile_positions(&children.1, windows);
         } else {
-            println!("DEBUG: Warning: Non-leaf tile with no children");
+            debug!("Warning: Non-leaf tile with no children");
         }
     }
 }

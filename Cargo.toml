@@ -4,6 +4,11 @@ version = "0.2.0"
 edition = "2024"
 
 [dependencies]
+argh = "0.1"
+ctrlc = "3.4"
+flexi_logger = "0.27"
+log = "0.4"
+tray-icon = "0.14"
 windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_GdiPlus",
@@ -14,5 +19,3 @@ windows = { version = "0.62", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_SystemInformation",
 ]}
-tray-icon = "0.14"
-ctrlc = "3.4"
