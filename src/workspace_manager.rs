@@ -556,8 +556,10 @@ impl WorkspaceManager {
                             old_workspace
                         );
                         let monitor_copy = monitor.clone();
-                        let windows = &mut monitor.workspaces[workspace_idx].windows;
-                        tiler.tile_windows(&monitor_copy, windows);
+                        let workspace = &mut monitor.workspaces[workspace_idx];
+                        let layout_tree = &mut workspace.layout_tree;
+                        let windows = &mut workspace.windows;
+                        tiler.tile_windows(&monitor_copy, layout_tree, windows);
                     } else {
                         println!(
                             "DEBUG: Source workspace {} is now empty, no tiling needed",
@@ -619,8 +621,10 @@ impl WorkspaceManager {
             if !monitor.workspaces[workspace_idx].windows.is_empty() {
                 // Create a copy of the monitor for reading
                 let monitor_copy = monitor.clone();
-                let windows = &mut monitor.workspaces[workspace_idx].windows;
-                tiler.tile_windows(&monitor_copy, windows);
+                let workspace = &mut monitor.workspaces[workspace_idx];
+                let layout_tree = &mut workspace.layout_tree;
+                let windows = &mut workspace.windows;
+                tiler.tile_windows(&monitor_copy, layout_tree, windows);
             }
         }
     }
@@ -780,6 +784,9 @@ impl WorkspaceManager {
         windows: &[(Window, RECT)],
     ) -> Option<Window> {
         let focused_rect = focused.rect;
+        let focused_center_x = (focused_rect.left + focused_rect.right) / 2;
+        let focused_center_y = (focused_rect.top + focused_rect.bottom) / 2;
+
         println!(
             "DEBUG: Finding next focus from window {:?} with rect {:?}",
             focused.hwnd, focused_rect
@@ -790,91 +797,56 @@ impl WorkspaceManager {
             .filter(|(w, _)| w.hwnd != focused.hwnd)
             .collect();
 
-        println!(
-            "DEBUG: Found {} candidate windows (excluding focused)",
-            candidates.len()
-        );
-
         if candidates.is_empty() {
-            println!("DEBUG: No candidate windows available");
             return None;
         }
 
-        // Find the best candidate based on direction
-        let result = match direction {
-            FocusDirection::Left => {
-                println!("DEBUG: Looking for window to the left of focused window");
-                let left_candidates: Vec<_> = candidates
-                    .iter()
-                    .filter(|(_, rect)| rect.right < focused_rect.left)
-                    .collect();
-                println!("DEBUG: {} windows found to the left", left_candidates.len());
-                left_candidates
-                    .iter()
-                    .min_by_key(|(_, rect)| focused_rect.left - rect.right)
-                    .map(|(w, _)| {
-                        println!("DEBUG: Selected left candidate: hwnd={:?}", w.hwnd);
-                        w.clone()
-                    })
-            }
-            FocusDirection::Right => {
-                println!("DEBUG: Looking for window to the right of focused window");
-                let right_candidates: Vec<_> = candidates
-                    .iter()
-                    .filter(|(_, rect)| rect.left > focused_rect.right)
-                    .collect();
-                println!(
-                    "DEBUG: {} windows found to the right",
-                    right_candidates.len()
-                );
-                right_candidates
-                    .iter()
-                    .min_by_key(|(_, rect)| rect.left - focused_rect.right)
-                    .map(|(w, _)| {
-                        println!("DEBUG: Selected right candidate: hwnd={:?}", w.hwnd);
-                        w.clone()
-                    })
-            }
-            FocusDirection::Up => {
-                println!("DEBUG: Looking for window above focused window");
-                let up_candidates: Vec<_> = candidates
-                    .iter()
-                    .filter(|(_, rect)| rect.bottom < focused_rect.top)
-                    .collect();
-                println!("DEBUG: {} windows found above", up_candidates.len());
-                up_candidates
-                    .iter()
-                    .min_by_key(|(_, rect)| focused_rect.top - rect.bottom)
-                    .map(|(w, _)| {
-                        println!("DEBUG: Selected up candidate: hwnd={:?}", w.hwnd);
-                        w.clone()
-                    })
-            }
-            FocusDirection::Down => {
-                println!("DEBUG: Looking for window below focused window");
-                let down_candidates: Vec<_> = candidates
-                    .iter()
-                    .filter(|(_, rect)| rect.top > focused_rect.bottom)
-                    .collect();
-                println!("DEBUG: {} windows found below", down_candidates.len());
-                down_candidates
-                    .iter()
-                    .min_by_key(|(_, rect)| rect.top - focused_rect.bottom)
-                    .map(|(w, _)| {
-                        println!("DEBUG: Selected down candidate: hwnd={:?}", w.hwnd);
-                        w.clone()
-                    })
-            }
-        };
+        let filtered_candidates: Vec<_> = candidates
+            .iter()
+            .filter(|(_, rect)| match direction {
+                FocusDirection::Left => rect.right <= focused_rect.left,
+                FocusDirection::Right => rect.left >= focused_rect.right,
+                FocusDirection::Up => rect.bottom <= focused_rect.top,
+                FocusDirection::Down => rect.top >= focused_rect.bottom,
+            })
+            .collect();
 
-        if result.is_none() {
-            println!(
-                "DEBUG: No suitable window found in direction {:?}",
-                direction
-            );
-        }
+        println!(
+            "DEBUG: {} windows found in direction {:?}",
+            filtered_candidates.len(),
+            direction
+        );
 
-        result
+        filtered_candidates
+            .iter()
+            .min_by_key(|(_, rect)| {
+                let rect_center_x = (rect.left + rect.right) / 2;
+                let rect_center_y = (rect.top + rect.bottom) / 2;
+
+                let (dist_primary, dist_secondary) = match direction {
+                    FocusDirection::Left => (
+                        focused_rect.left - rect.right,
+                        (focused_center_y - rect_center_y).abs(),
+                    ),
+                    FocusDirection::Right => (
+                        rect.left - focused_rect.right,
+                        (focused_center_y - rect_center_y).abs(),
+                    ),
+                    FocusDirection::Up => (
+                        focused_rect.top - rect.bottom,
+                        (focused_center_x - rect_center_x).abs(),
+                    ),
+                    FocusDirection::Down => (
+                        rect.top - focused_rect.bottom,
+                        (focused_center_x - rect_center_x).abs(),
+                    ),
+                };
+
+                // Prioritize primary distance, then secondary
+                // Use a large multiplier for primary distance to ensure it's the main factor
+                dist_primary * 1000 + dist_secondary
+            })
+            .map(|(w, _)| w.clone())
     }
 
     pub fn set_window_focus(&mut self, hwnd: HWND) {
@@ -1059,6 +1031,21 @@ impl WorkspaceManager {
                 // Swap the rects
                 self.monitors[m1].workspaces[ws1_idx].windows[w1].rect = rect2;
                 self.monitors[m2].workspaces[ws2_idx].windows[w2].rect = rect1;
+
+                // IMPORTANT: Also swap the HWNDs in the layout tree if it exists
+                if m1 == m2 && ws1_idx == ws2_idx {
+                    if let Some(ref mut layout_tree) =
+                        self.monitors[m1].workspaces[ws1_idx].layout_tree
+                    {
+                        Self::swap_hwnds_in_tree(layout_tree, hwnd1.0 as isize, hwnd2.0 as isize);
+                    }
+                } else {
+                    // If moving across monitors/workspaces, just clear the trees to be safe
+                    // and let them re-generate on next tile call.
+                    self.monitors[m1].workspaces[ws1_idx].layout_tree = None;
+                    self.monitors[m2].workspaces[ws2_idx].layout_tree = None;
+                }
+
                 println!("DEBUG: Window position swap completed successfully");
                 Ok(())
             }
@@ -1156,7 +1143,9 @@ impl WorkspaceManager {
         if any_tiled_moved {
             for monitor in self.monitors.iter_mut() {
                 let ws_idx = (monitor.active_workspace - 1) as usize;
-                monitor.workspaces[ws_idx].windows.sort_by_key(|w| (w.rect.left, w.rect.top));
+                monitor.workspaces[ws_idx]
+                    .windows
+                    .sort_by_key(|w| (w.rect.left, w.rect.top));
             }
             self.tile_active_workspaces();
             self.apply_window_positions();
@@ -1237,6 +1226,7 @@ impl WorkspaceManager {
         }
 
         let focused_hwnd = HWND(focused.unwrap().hwnd as _);
+        let mut handled = false;
 
         // Find and update the window in workspace
         for monitor in self.monitors.iter_mut() {
@@ -1252,18 +1242,27 @@ impl WorkspaceManager {
                         window.original_rect,
                     )?;
                     window.is_fullscreen = false;
+                    window.is_tiled = true;
                 } else {
                     // Set to fullscreen
                     println!("Setting window {:?} to fullscreen", focused_hwnd);
                     window.original_rect = window.rect; // Store current position
                     crate::windows_lib::set_window_fullscreen(focused_hwnd, monitor_rect)?;
                     window.is_fullscreen = true;
+                    window.is_tiled = false;
                 }
-
-                return Ok(());
+                handled = true;
+                break;
             }
         }
-        Err("Window not found in active workspace".to_string())
+
+        if handled {
+            self.tile_active_workspaces();
+            self.apply_window_positions();
+            Ok(())
+        } else {
+            Err("Window not found in active workspace".to_string())
+        }
     }
 
     pub fn exit_fullscreen_all(&mut self) {
@@ -1299,6 +1298,221 @@ impl WorkspaceManager {
             }
         }
     }
+
+    pub fn resize_focused_window(
+        &mut self,
+        direction: ResizeDirection,
+        amount: f32,
+    ) -> Result<(), String> {
+        let focused = self.get_focused_window();
+        if focused.is_none() {
+            return Err("No focused window".to_string());
+        }
+        let focused_window = focused.unwrap();
+
+        // Find the workspace and monitor for the focused window
+        for monitor in self.monitors.iter_mut() {
+            if let Some(workspace) = monitor.get_workspace_mut(monitor.active_workspace) {
+                if let Some(layout_tree) = workspace.layout_tree.as_mut() {
+                    // Find the ancestor tile with matching split direction
+                    let target_direction = match direction {
+                        ResizeDirection::Horizontal => crate::tiling::SplitDirection::Vertical,
+                        ResizeDirection::Vertical => crate::tiling::SplitDirection::Horizontal,
+                    };
+
+                    if let Some(target_tile) = Self::find_ancestor_with_direction(
+                        layout_tree,
+                        focused_window.hwnd,
+                        target_direction,
+                    ) {
+                        // Adjust the split ratio
+                        target_tile.split_ratio =
+                            (target_tile.split_ratio + amount).clamp(0.1, 0.9);
+
+                        // Re-apply tiling with updated ratios
+                        self.tile_active_workspaces();
+                        self.apply_window_positions();
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        Err("No suitable ancestor found for resizing in this direction".to_string())
+    }
+
+    fn find_ancestor_with_direction<'a>(
+        tile: &'a mut crate::tiling::Tile,
+        hwnd: isize,
+        target_direction: crate::tiling::SplitDirection,
+    ) -> Option<&'a mut crate::tiling::Tile> {
+        // Check if any child contains the window and has a deeper ancestor matching the direction
+        let mut search_deeper = false;
+        if let Some(ref children) = tile.children {
+            if Self::tree_contains_window(&children.0, hwnd) {
+                if Self::has_ancestor_with_direction(&children.0, hwnd, target_direction) {
+                    search_deeper = true;
+                }
+            } else if Self::tree_contains_window(&children.1, hwnd) {
+                if Self::has_ancestor_with_direction(&children.1, hwnd, target_direction) {
+                    search_deeper = true;
+                }
+            }
+        }
+
+        if search_deeper {
+            let children = tile.children.as_mut().unwrap();
+            let child_to_search = if Self::tree_contains_window(&children.0, hwnd) {
+                &mut children.0
+            } else {
+                &mut children.1
+            };
+            return Self::find_ancestor_with_direction(child_to_search, hwnd, target_direction);
+        }
+
+        // If no deeper ancestor found, check if this one matches
+        if tile.split_direction == Some(target_direction) && Self::tree_contains_window(tile, hwnd)
+        {
+            return Some(tile);
+        }
+
+        None
+    }
+
+    fn has_ancestor_with_direction(
+        tile: &crate::tiling::Tile,
+        hwnd: isize,
+        target_direction: crate::tiling::SplitDirection,
+    ) -> bool {
+        if let Some(ref children) = tile.children {
+            if Self::tree_contains_window(&children.0, hwnd) {
+                if Self::has_ancestor_with_direction(&children.0, hwnd, target_direction) {
+                    return true;
+                }
+            } else if Self::tree_contains_window(&children.1, hwnd) {
+                if Self::has_ancestor_with_direction(&children.1, hwnd, target_direction) {
+                    return true;
+                }
+            }
+
+            if tile.split_direction == Some(target_direction) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn find_parent_tile(
+        tile: &mut crate::tiling::Tile,
+        hwnd: isize,
+    ) -> Option<&mut crate::tiling::Tile> {
+        // Check if any child is a parent
+        let mut search_deeper = false;
+        if let Some(ref children) = tile.children {
+            if Self::has_parent_in_subtree(&children.0, hwnd)
+                || Self::has_parent_in_subtree(&children.1, hwnd)
+            {
+                search_deeper = true;
+            }
+        }
+
+        if search_deeper {
+            let children = tile.children.as_mut().unwrap();
+            let child_to_search = if Self::tree_contains_window(&children.0, hwnd) {
+                &mut children.0
+            } else {
+                &mut children.1
+            };
+            return Self::find_parent_tile(child_to_search, hwnd);
+        }
+
+        // If no child is a parent, but this tile contains the window, then this is the parent
+        if tile.windows.contains(&hwnd) && tile.children.is_some() {
+            return Some(tile);
+        }
+
+        None
+    }
+
+    fn has_parent_in_subtree(tile: &crate::tiling::Tile, hwnd: isize) -> bool {
+        if let Some(ref children) = tile.children {
+            if Self::has_parent_in_subtree(&children.0, hwnd)
+                || Self::has_parent_in_subtree(&children.1, hwnd)
+            {
+                return true;
+            }
+            if tile.windows.contains(&hwnd) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn tree_contains_window(tile: &crate::tiling::Tile, hwnd: isize) -> bool {
+        if tile.is_leaf() {
+            tile.windows.contains(&hwnd)
+        } else if let Some(ref children) = tile.children {
+            Self::tree_contains_window(&children.0, hwnd)
+                || Self::tree_contains_window(&children.1, hwnd)
+        } else {
+            false
+        }
+    }
+
+    pub fn flip_focused_region(&mut self) -> Result<(), String> {
+        let focused = self.get_focused_window();
+        if focused.is_none() {
+            return Err("No focused window".to_string());
+        }
+        let focused_window = focused.unwrap();
+
+        // Find the workspace and monitor for the focused window
+        for monitor in self.monitors.iter_mut() {
+            if let Some(workspace) = monitor.get_workspace_mut(monitor.active_workspace) {
+                if let Some(layout_tree) = workspace.layout_tree.as_mut() {
+                    // Find the tile containing the focused window
+                    if let Some(parent_tile) =
+                        Self::find_parent_tile(layout_tree, focused_window.hwnd)
+                    {
+                        // Flip the split direction
+                        parent_tile.split_direction = match parent_tile.split_direction {
+                            Some(crate::tiling::SplitDirection::Horizontal) => {
+                                Some(crate::tiling::SplitDirection::Vertical)
+                            }
+                            Some(crate::tiling::SplitDirection::Vertical) => {
+                                Some(crate::tiling::SplitDirection::Horizontal)
+                            }
+                            None => None,
+                        };
+
+                        // Re-apply tiling with flipped direction
+                        self.tile_active_workspaces();
+                        self.apply_window_positions();
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        Err("Focused window not found in layout tree".to_string())
+    }
+
+    fn swap_hwnds_in_tree(tile: &mut crate::tiling::Tile, hwnd1: isize, hwnd2: isize) {
+        // Update windows list in the current tile (both leaf and intermediate)
+        for hwnd in &mut tile.windows {
+            if *hwnd == hwnd1 {
+                *hwnd = hwnd2;
+            } else if *hwnd == hwnd2 {
+                *hwnd = hwnd1;
+            }
+        }
+
+        // Recurse into children
+        if let Some(ref mut children) = tile.children {
+            Self::swap_hwnds_in_tree(&mut children.0, hwnd1, hwnd2);
+            Self::swap_hwnds_in_tree(&mut children.1, hwnd1, hwnd2);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1307,6 +1521,12 @@ pub enum FocusDirection {
     Right,
     Up,
     Down,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ResizeDirection {
+    Horizontal,
+    Vertical,
 }
 
 impl Default for WorkspaceManager {

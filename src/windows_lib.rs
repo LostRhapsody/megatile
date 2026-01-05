@@ -77,7 +77,10 @@ pub fn is_normal_window_hwnd(hwnd: HWND) -> bool {
 }
 
 pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
-    println!("Checking if window, title {}, class name {}, hwnd {:?}, is 'normal'.", title, class_name, hwnd);
+    println!(
+        "Checking if window, title {}, class name {}, hwnd {:?}, is 'normal'.",
+        title, class_name, hwnd
+    );
     unsafe {
         if !IsWindowVisible(hwnd).as_bool() {
             return false;
@@ -87,11 +90,12 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
             return false;
         }
 
-        if title == "Windows Input Experience" ||
-        title == "Chrome Legacy Window" ||
-        title == "OLEChannelWnd" ||
-        title == "DesktopWindowXamlSource" ||
-        title == "Non Client Input Sink Window" {
+        if title == "Windows Input Experience"
+            || title == "Chrome Legacy Window"
+            || title == "OLEChannelWnd"
+            || title == "DesktopWindowXamlSource"
+            || title == "Non Client Input Sink Window"
+        {
             return false;
         }
 

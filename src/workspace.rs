@@ -41,6 +41,7 @@ impl Window {
 pub struct Workspace {
     pub windows: Vec<Window>,
     pub focused_window_hwnd: Option<isize>,
+    pub layout_tree: Option<crate::tiling::Tile>,
 }
 
 impl Workspace {
@@ -48,6 +49,7 @@ impl Workspace {
         Workspace {
             windows: Vec::new(),
             focused_window_hwnd: None,
+            layout_tree: None,
         }
     }
 

@@ -20,6 +20,15 @@ pub enum HotkeyAction {
     MoveUp,
     MoveDown,
 
+    // Window resizing
+    ResizeHorizontalIncrease,
+    ResizeHorizontalDecrease,
+    ResizeVerticalIncrease,
+    ResizeVerticalDecrease,
+
+    // Layout operations
+    FlipRegion,
+
     // Workspace switching
     SwitchWorkspace(u8),
     MoveToWorkspace(u8),
@@ -115,68 +124,95 @@ impl HotkeyManager {
                 27,
                 HotkeyAction::MoveToWorkspace(9),
             ),
+            // Window resizing
+            (
+                MOD_ALT,
+                VIRTUAL_KEY(0xBB),
+                28,
+                HotkeyAction::ResizeHorizontalIncrease,
+            ), // +
+            (
+                MOD_ALT,
+                VIRTUAL_KEY(0xBD),
+                29,
+                HotkeyAction::ResizeHorizontalDecrease,
+            ), // -
+            (
+                MOD_ALT | MOD_SHIFT,
+                VIRTUAL_KEY(0xBB),
+                30,
+                HotkeyAction::ResizeVerticalIncrease,
+            ), // Shift++
+            (
+                MOD_ALT | MOD_SHIFT,
+                VIRTUAL_KEY(0xBD),
+                31,
+                HotkeyAction::ResizeVerticalDecrease,
+            ), // Shift+-
+            // Layout operations
+            (MOD_ALT, VIRTUAL_KEY(0x4A), 32, HotkeyAction::FlipRegion), // J
             // Window operations
-            (MOD_ALT, VIRTUAL_KEY(0x57), 28, HotkeyAction::CloseWindow), // W
-            (MOD_ALT, VIRTUAL_KEY(0x54), 29, HotkeyAction::ToggleTiling), // T
+            (MOD_ALT, VIRTUAL_KEY(0x57), 33, HotkeyAction::CloseWindow), // W
+            (MOD_ALT, VIRTUAL_KEY(0x54), 34, HotkeyAction::ToggleTiling), // T
             (
                 MOD_ALT,
                 VIRTUAL_KEY(0x46),
-                30,
+                35,
                 HotkeyAction::ToggleFullscreen,
             ), // F
             // Move to workspace and follow (Alt + Ctrl + Shift + 1-9)
             (
                 MOD_ALT | MOD_SHIFT | MOD_CONTROL,
                 VK_1,
-                31,
+                36,
                 HotkeyAction::MoveToWorkspaceFollow(1),
             ),
             (
                 MOD_ALT | MOD_SHIFT | MOD_CONTROL,
                 VK_2,
-                32,
+                37,
                 HotkeyAction::MoveToWorkspaceFollow(2),
             ),
             (
                 MOD_ALT | MOD_SHIFT | MOD_CONTROL,
                 VK_3,
-                33,
+                38,
                 HotkeyAction::MoveToWorkspaceFollow(3),
             ),
             (
                 MOD_ALT | MOD_SHIFT | MOD_CONTROL,
                 VK_4,
-                34,
+                39,
                 HotkeyAction::MoveToWorkspaceFollow(4),
             ),
             (
                 MOD_ALT | MOD_SHIFT | MOD_CONTROL,
                 VK_5,
-                35,
+                40,
                 HotkeyAction::MoveToWorkspaceFollow(5),
             ),
             (
                 MOD_ALT | MOD_SHIFT | MOD_CONTROL,
                 VK_6,
-                36,
+                41,
                 HotkeyAction::MoveToWorkspaceFollow(6),
             ),
             (
                 MOD_ALT | MOD_SHIFT | MOD_CONTROL,
                 VK_7,
-                37,
+                42,
                 HotkeyAction::MoveToWorkspaceFollow(7),
             ),
             (
                 MOD_ALT | MOD_SHIFT | MOD_CONTROL,
                 VK_8,
-                38,
+                43,
                 HotkeyAction::MoveToWorkspaceFollow(8),
             ),
             (
                 MOD_ALT | MOD_SHIFT | MOD_CONTROL,
                 VK_9,
-                39,
+                44,
                 HotkeyAction::MoveToWorkspaceFollow(9),
             ),
         ];

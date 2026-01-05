@@ -188,6 +188,39 @@ fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
             Ok(()) => println!("Fullscreen toggled"),
             Err(e) => eprintln!("Failed to toggle fullscreen: {}", e),
         },
+        hotkeys::HotkeyAction::ResizeHorizontalIncrease => {
+            if let Err(e) =
+                wm.resize_focused_window(workspace_manager::ResizeDirection::Horizontal, 0.05)
+            {
+                eprintln!("Failed to resize window: {}", e);
+            }
+        }
+        hotkeys::HotkeyAction::ResizeHorizontalDecrease => {
+            if let Err(e) =
+                wm.resize_focused_window(workspace_manager::ResizeDirection::Horizontal, -0.05)
+            {
+                eprintln!("Failed to resize window: {}", e);
+            }
+        }
+        hotkeys::HotkeyAction::ResizeVerticalIncrease => {
+            if let Err(e) =
+                wm.resize_focused_window(workspace_manager::ResizeDirection::Vertical, 0.05)
+            {
+                eprintln!("Failed to resize window: {}", e);
+            }
+        }
+        hotkeys::HotkeyAction::ResizeVerticalDecrease => {
+            if let Err(e) =
+                wm.resize_focused_window(workspace_manager::ResizeDirection::Vertical, -0.05)
+            {
+                eprintln!("Failed to resize window: {}", e);
+            }
+        }
+        hotkeys::HotkeyAction::FlipRegion => {
+            if let Err(e) = wm.flip_focused_region() {
+                eprintln!("Failed to flip region: {}", e);
+            }
+        }
         hotkeys::HotkeyAction::CloseWindow => match wm.close_focused_window() {
             Ok(()) => println!("Window closed successfully"),
             Err(e) => eprintln!("Failed to close window: {}", e),
