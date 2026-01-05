@@ -44,6 +44,12 @@ fn start_window_monitoring(workspace_manager: Arc<Mutex<WorkspaceManager>>) {
                 wm.get_all_managed_hwnds().into_iter().collect()
             };
 
+            // Update window positions (track user moves)
+            {
+                let wm = workspace_manager.lock().unwrap();
+                wm.update_window_positions();
+            }
+
             // Detect closed windows
             let closed_hwnds: Vec<isize> =
                 previous_hwnds.difference(&current_hwnds).cloned().collect();
@@ -199,6 +205,9 @@ fn main() {
 
     println!("MegaTile is running. Use the tray icon to exit.");
 
+    let mut last_monitor_check = std::time::Instant::now();
+    let monitor_check_interval = Duration::from_secs(5);
+
     // Main event loop
     loop {
         if tray.should_exit() {
@@ -206,6 +215,20 @@ fn main() {
             cleanup_on_exit(&workspace_manager);
             hotkey_manager.unregister_all(hwnd);
             break;
+        }
+
+        // Periodic monitor check
+        if last_monitor_check.elapsed() >= monitor_check_interval {
+            // only try if wm is NOT locked. This is not a critical code path and can be skipped safely.
+            if let Ok(mut wm) = workspace_manager.try_lock() {
+                if wm.check_monitor_changes() {
+                    println!("Monitor change detected by periodic check");
+                    if let Err(e) = wm.reenumerate_monitors() {
+                        eprintln!("Failed to reenumerate monitors: {}", e);
+                    }
+                }
+                last_monitor_check = std::time::Instant::now();
+            }
         }
 
         // Process window messages
@@ -216,6 +239,12 @@ fn main() {
                 let action = hotkey_manager.get_action(msg.wParam.0 as i32);
                 if let Some(action) = action {
                     handle_hotkey(action, &workspace_manager);
+                }
+            } else if msg.message == WM_DISPLAYCHANGE {
+                println!("Display configuration changed (WM_DISPLAYCHANGE)");
+                let mut wm = workspace_manager.lock().unwrap();
+                if let Err(e) = wm.reenumerate_monitors() {
+                    eprintln!("Failed to reenumerate monitors after display change: {}", e);
                 }
             } else {
                 // Only dispatch non-hotkey messages

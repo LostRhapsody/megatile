@@ -2,6 +2,7 @@ use super::workspace::{Monitor, Window};
 use crate::tiling::DwindleTiler;
 use crate::windows_lib::{hide_window_from_taskbar, show_window_in_taskbar};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
     IsZoomed, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE,
@@ -10,6 +11,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub struct WorkspaceManager {
     monitors: Arc<Mutex<Vec<Monitor>>>,
     active_workspace_global: u8, // All monitors share the same active workspace
+    last_reenumerate: Instant,
 }
 
 impl WorkspaceManager {
@@ -17,6 +19,7 @@ impl WorkspaceManager {
         WorkspaceManager {
             monitors: Arc::new(Mutex::new(Vec::new())),
             active_workspace_global: 1,
+            last_reenumerate: Instant::now() - Duration::from_secs(60),
         }
     }
 
@@ -51,36 +54,30 @@ impl WorkspaceManager {
     }
 
     pub fn get_monitor_for_window(&self, hwnd: HWND) -> Option<usize> {
-        use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+        use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
 
-        println!("DEBUG: Finding monitor for window {:?}", hwnd.0);
-        let mut rect = RECT::default();
-        unsafe {
-            if GetWindowRect(hwnd, &mut rect).is_err() {
-                println!("DEBUG: Failed to get window rect for {:?}", hwnd.0);
-                return None;
-            }
-        }
+        let hmonitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
 
-        println!("DEBUG: Window rect: {:?}", rect);
         let monitors = self.monitors.lock().unwrap();
-        println!(
-            "DEBUG: Checking {} monitors for window containment",
-            monitors.len()
-        );
-
         for (i, monitor) in monitors.iter().enumerate() {
-            println!("DEBUG: Checking monitor {} rect: {:?}", i, monitor.rect);
-            if rect.left >= monitor.rect.left
-                && rect.top >= monitor.rect.top
-                && rect.right <= monitor.rect.right
-                && rect.bottom <= monitor.rect.bottom
-            {
-                println!("DEBUG: Window {:?} contained in monitor {}", hwnd.0, i);
+            if monitor.hmonitor == hmonitor.0 as isize {
                 return Some(i);
             }
         }
-        println!("DEBUG: Window {:?} not contained in any monitor", hwnd.0);
+
+        // Fallback to containment check if hmonitor doesn't match
+        for (i, monitor) in monitors.iter().enumerate() {
+            if let Ok(rect) = crate::windows_lib::get_window_rect(hwnd) {
+                if rect.left >= monitor.rect.left
+                    && rect.top >= monitor.rect.top
+                    && rect.right <= monitor.rect.right
+                    && rect.bottom <= monitor.rect.bottom
+                {
+                    return Some(i);
+                }
+            }
+        }
+
         None
     }
 
@@ -180,9 +177,72 @@ impl WorkspaceManager {
         }
     }
 
-    pub fn get_monitors(&self) -> Vec<Monitor> {
+    pub fn reenumerate_monitors(&mut self) -> Result<(), String> {
+        // Prevent redundant re-enumerations within 500ms
+        if self.last_reenumerate.elapsed() < Duration::from_millis(500) {
+            return Ok(());
+        }
+        self.last_reenumerate = Instant::now();
+
+        println!("Re-enumerating monitors...");
+
+        // Get current monitor info
+        let monitor_infos = crate::windows_lib::enumerate_monitors();
+        println!("Found {} monitor(s)", monitor_infos.len());
+
+        let mut monitors_guard = self.monitors.lock().unwrap();
+        let mut new_monitors: Vec<Monitor> = Vec::new();
+
+        for (i, info) in monitor_infos.iter().enumerate() {
+            println!("  Monitor {}: {:?}", i, info.rect);
+
+            // Try to preserve workspace data from existing monitor by matching hmonitor
+            let existing_workspace_data = if let Some(old_monitor) =
+                monitors_guard.iter().find(|m| m.hmonitor == info.hmonitor)
+            {
+                old_monitor.workspaces.clone()
+            } else {
+                std::array::from_fn(|_| crate::workspace::Workspace::new())
+            };
+
+            let mut monitor = Monitor::new(info.hmonitor, info.rect);
+            monitor.workspaces = existing_workspace_data;
+            monitor.active_workspace = self.active_workspace_global;
+            new_monitors.push(monitor);
+        }
+
+        // Update monitors
+        *monitors_guard = new_monitors;
+        drop(monitors_guard);
+
+        // Re-tile active workspace on all monitors
+        self.tile_active_workspaces();
+        self.apply_window_positions();
+
+        println!("Monitor re-enumeration complete");
+        Ok(())
+    }
+
+    pub fn check_monitor_changes(&mut self) -> bool {
+        let current_infos = crate::windows_lib::enumerate_monitors();
         let monitors = self.monitors.lock().unwrap();
-        monitors.clone()
+
+        if current_infos.len() != monitors.len() {
+            return true;
+        }
+
+        for (i, info) in current_infos.iter().enumerate() {
+            if info.hmonitor != monitors[i].hmonitor
+                || info.rect.left != monitors[i].rect.left
+                || info.rect.top != monitors[i].rect.top
+                || info.rect.right != monitors[i].rect.right
+                || info.rect.bottom != monitors[i].rect.bottom
+            {
+                return true;
+            }
+        }
+
+        false
     }
 
     pub fn get_workspace_window_count(&self, workspace_num: u8) -> usize {
@@ -325,7 +385,10 @@ impl WorkspaceManager {
                     // If no remembered focus, try the first tiled window
                     if let Some(first_window) = workspace.windows.iter().find(|w| w.is_tiled) {
                         focus_target = Some(HWND(first_window.hwnd as _));
-                        println!("DEBUG: No remembered focus, using first tiled window {:?} for workspace {}", first_window.hwnd, new_workspace);
+                        println!(
+                            "DEBUG: No remembered focus, using first tiled window {:?} for workspace {}",
+                            first_window.hwnd, new_workspace
+                        );
                         break;
                     }
                 }
@@ -640,6 +703,25 @@ impl WorkspaceManager {
             return Err("Window not found".to_string());
         }
 
+        let rect_to_restore = if !is_now_tiled {
+            let mut r = None;
+            for monitor in monitors.iter() {
+                if let Some(window) = monitor.get_window(hwnd) {
+                    r = Some(window.original_rect);
+                    break;
+                }
+            }
+            r
+        } else {
+            None
+        };
+
+        drop(monitors);
+
+        if let Some(rect) = rect_to_restore {
+            self.set_window_position(hwnd, &rect);
+        }
+
         println!(
             "DEBUG: Window {:?} is now {}",
             hwnd.0,
@@ -647,7 +729,6 @@ impl WorkspaceManager {
         );
 
         // Re-tile active workspaces
-        drop(monitors);
         self.tile_active_workspaces();
         self.apply_window_positions();
 
@@ -1059,6 +1140,62 @@ impl WorkspaceManager {
         }
     }
 
+    pub fn update_window_positions(&self) {
+        use crate::windows_lib::get_normal_windows;
+        let current_windows = get_normal_windows();
+
+        // Get monitor rects first to avoid borrow conflicts and double locking
+        let monitor_rects: Vec<RECT> = {
+            let monitors = self.monitors.lock().unwrap();
+            monitors.iter().map(|m| m.rect).collect()
+        };
+
+        let mut monitors = self.monitors.lock().unwrap();
+
+        for win_info in current_windows {
+            let hwnd_val = win_info.hwnd.0 as isize;
+            for monitor in monitors.iter_mut() {
+                if let Some(window) = monitor.find_window_by_hwnd_mut(hwnd_val) {
+                    let moved_from_last_known = window.rect.left != win_info.rect.left
+                        || window.rect.top != win_info.rect.top
+                        || window.rect.right != win_info.rect.right
+                        || window.rect.bottom != win_info.rect.bottom;
+
+                    if moved_from_last_known {
+                        // Update original_rect whenever the window moves from its last known position
+                        // This captures the user's "preferred" position
+                        window.original_rect = win_info.rect;
+
+                        if !window.is_tiled {
+                            // If it's floating, also update its current tracking rect
+                            window.rect = win_info.rect;
+                        }
+                    }
+
+                    // Also check if monitor changed using pre-collected rects
+                    let center_x = (win_info.rect.left + win_info.rect.right) / 2;
+                    let center_y = (win_info.rect.top + win_info.rect.bottom) / 2;
+
+                    let new_monitor_idx = monitor_rects
+                        .iter()
+                        .enumerate()
+                        .find(|(_, rect)| {
+                            center_x >= rect.left
+                                && center_x <= rect.right
+                                && center_y >= rect.top
+                                && center_y <= rect.bottom
+                        })
+                        .map(|(i, _)| i);
+
+                    if let Some(new_idx) = new_monitor_idx {
+                        if new_idx != window.monitor {
+                            window.monitor = new_idx;
+                        }
+                    }
+                }
+            }
+        }
+    }
     pub fn print_workspace_status(&self) {
         let monitors = self.monitors.lock().unwrap();
         for (m_idx, monitor) in monitors.iter().enumerate() {

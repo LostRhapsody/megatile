@@ -86,13 +86,16 @@ impl Workspace {
         self.windows.iter_mut().find(|w| w.hwnd == hwnd.0 as isize)
     }
 
+    pub fn total_window_count(&self) -> usize {
+        self.windows.len()
+    }
+
     pub fn get_focused_window(&self) -> Option<&Window> {
         self.windows.iter().find(|w| w.is_focused)
     }
 
     pub fn set_focus(&mut self, hwnd: HWND, focused: bool) {
         let hwnd_val = hwnd.0 as isize;
-        println!("hwnd_val: {}", hwnd_val);
         if let Some(window) = self.get_window_mut(hwnd) {
             window.is_focused = focused;
             if focused {
@@ -103,10 +106,6 @@ impl Workspace {
 
     pub fn window_count(&self) -> usize {
         self.windows.iter().filter(|w| w.is_tiled).count()
-    }
-
-    pub fn total_window_count(&self) -> usize {
-        self.windows.len()
     }
 }
 
@@ -123,19 +122,18 @@ impl Monitor {
         Monitor {
             hmonitor,
             rect,
-            workspaces: [
-                Workspace::new(),
-                Workspace::new(),
-                Workspace::new(),
-                Workspace::new(),
-                Workspace::new(),
-                Workspace::new(),
-                Workspace::new(),
-                Workspace::new(),
-                Workspace::new(),
-            ],
+            workspaces: std::array::from_fn(|_| Workspace::new()),
             active_workspace: 1,
         }
+    }
+
+    pub fn find_window_by_hwnd_mut(&mut self, hwnd: isize) -> Option<&mut Window> {
+        for workspace in &mut self.workspaces {
+            if let Some(window) = workspace.windows.iter_mut().find(|w| w.hwnd == hwnd) {
+                return Some(window);
+            }
+        }
+        None
     }
 
     pub fn get_active_workspace(&self) -> &Workspace {

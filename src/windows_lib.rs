@@ -180,6 +180,14 @@ pub fn show_window_in_taskbar(hwnd: HWND) -> Result<(), String> {
     }
 }
 
+pub fn get_window_rect(hwnd: HWND) -> Result<RECT, String> {
+    let mut rect = RECT::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut rect).map_err(|e| e.to_string())?;
+    }
+    Ok(rect)
+}
+
 pub fn is_window_hidden(hwnd: HWND) -> bool {
     unsafe { !IsWindowVisible(hwnd).as_bool() }
 }
