@@ -11,13 +11,15 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateRoundRectRgn, EndPaint, InvalidateRect, PAINTSTRUCT, SetWindowRgn,
 };
 use windows::Win32::Graphics::GdiPlus::{
-    GdipCreateFont, GdipCreateFontFamilyFromName, GdipCreateFromHDC, GdipCreatePen1,
+    FillMode, GdipAddPathArc, GdipAddPathLine, GdipClosePathFigure, GdipCreateFont,
+    GdipCreateFontFamilyFromName, GdipCreateFromHDC, GdipCreatePath, GdipCreatePen1,
     GdipCreateSolidFill, GdipCreateStringFormat, GdipDeleteBrush, GdipDeleteFont,
-    GdipDeleteFontFamily, GdipDeleteGraphics, GdipDeletePen, GdipDeleteStringFormat,
-    GdipDrawRectangle, GdipDrawString, GdipFillEllipse, GdipFillRectangle, GdipSetSmoothingMode,
-    GdipSetStringFormatAlign, GdipSetStringFormatLineAlign, GdipSetTextRenderingHint,
-    GdiplusShutdown, GdiplusStartup, GdiplusStartupInput, GpBrush, GpFontFamily, GpGraphics, GpPen,
-    GpSolidFill, GpStringFormat, SmoothingModeHighQuality, StringAlignmentCenter,
+    GdipDeleteFontFamily, GdipDeleteGraphics, GdipDeletePath, GdipDeletePen,
+    GdipDeleteStringFormat, GdipDrawPath, GdipDrawString, GdipFillEllipse, GdipFillPath,
+    GdipSetSmoothingMode, GdipSetStringFormatAlign, GdipSetStringFormatLineAlign,
+    GdipSetTextRenderingHint, GdipStartPathFigure, GdiplusShutdown, GdiplusStartup,
+    GdiplusStartupInput, GpBrush, GpFontFamily, GpGraphics, GpPath, GpPen, GpSolidFill,
+    GpStringFormat, SmoothingModeHighQuality, StringAlignmentCenter,
     TextRenderingHintClearTypeGridFit, Unit,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -336,36 +338,111 @@ unsafe fn draw_background_gdiplus(graphics: *mut GpGraphics, rect: &RECT, accent
             return;
         }
 
-        // Fill the rounded rectangle background
-        // GDI+ doesn't have a direct rounded rectangle, so we fill a regular rect
-        // (the window region already clips to rounded corners)
-        let _ = GdipFillRectangle(
-            graphics,
-            brush as *mut GpBrush,
-            rect.left as f32,
-            rect.top as f32,
-            (rect.right - rect.left) as f32,
-            (rect.bottom - rect.top) as f32,
-        );
+        // Create rounded rectangle path for fill
+        let x = rect.left as f32;
+        let y = rect.top as f32;
+        let width = (rect.right - rect.left) as f32;
+        let height = (rect.bottom - rect.top) as f32;
+        let radius = CORNER_RADIUS as f32 / 2.0;
 
-        // Draw border
+        let fill_path = create_rounded_rect_path(x, y, width, height, radius);
+        if !fill_path.is_null() {
+            let _ = GdipFillPath(graphics, brush as *mut GpBrush, fill_path);
+            GdipDeletePath(fill_path);
+        }
+
+        GdipDeleteBrush(brush as *mut GpBrush);
+
+        // Draw border with rounded rectangle path
         let border_color = darken_color(bg_color, 0.85);
         let (br, bg_c, bb) = split_color(border_color);
         let mut pen: *mut GpPen = std::ptr::null_mut();
         let argb_border = make_argb(255, br, bg_c, bb);
         if GdipCreatePen1(argb_border, 2.0, Unit(0), &mut pen).0 == 0 {
-            let _ = GdipDrawRectangle(
-                graphics,
-                pen,
-                rect.left as f32 + 1.0,
-                rect.top as f32 + 1.0,
-                (rect.right - rect.left) as f32 - 2.0,
-                (rect.bottom - rect.top) as f32 - 2.0,
-            );
+            // Inset the border slightly
+            let border_path =
+                create_rounded_rect_path(x + 1.0, y + 1.0, width - 2.0, height - 2.0, radius);
+            if !border_path.is_null() {
+                let _ = GdipDrawPath(graphics, pen, border_path);
+                GdipDeletePath(border_path);
+            }
             GdipDeletePen(pen);
         }
+    }
+}
 
-        GdipDeleteBrush(brush as *mut GpBrush);
+/// Creates a GDI+ path for a rounded rectangle.
+unsafe fn create_rounded_rect_path(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+) -> *mut GpPath {
+    unsafe {
+        let mut path: *mut GpPath = std::ptr::null_mut();
+        // FillModeAlternate = 0
+        if GdipCreatePath(FillMode(0), &mut path).0 != 0 || path.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let diameter = radius * 2.0;
+
+        // Start the path figure
+        let _ = GdipStartPathFigure(path);
+
+        // Top-left arc
+        let _ = GdipAddPathArc(path, x, y, diameter, diameter, 180.0, 90.0);
+
+        // Top edge
+        let _ = GdipAddPathLine(path, x + radius, y, x + width - radius, y);
+
+        // Top-right arc
+        let _ = GdipAddPathArc(
+            path,
+            x + width - diameter,
+            y,
+            diameter,
+            diameter,
+            270.0,
+            90.0,
+        );
+
+        // Right edge
+        let _ = GdipAddPathLine(path, x + width, y + radius, x + width, y + height - radius);
+
+        // Bottom-right arc
+        let _ = GdipAddPathArc(
+            path,
+            x + width - diameter,
+            y + height - diameter,
+            diameter,
+            diameter,
+            0.0,
+            90.0,
+        );
+
+        // Bottom edge
+        let _ = GdipAddPathLine(path, x + width - radius, y + height, x + radius, y + height);
+
+        // Bottom-left arc
+        let _ = GdipAddPathArc(
+            path,
+            x,
+            y + height - diameter,
+            diameter,
+            diameter,
+            90.0,
+            90.0,
+        );
+
+        // Left edge (back to start)
+        let _ = GdipAddPathLine(path, x, y + height - radius, x, y + radius);
+
+        // Close the figure
+        let _ = GdipClosePathFigure(path);
+
+        path
     }
 }
 
