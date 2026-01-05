@@ -1,3 +1,8 @@
+//! Visual workspace status bar indicator.
+//!
+//! Displays a floating bar showing the current workspace with dot indicators.
+//! The bar uses the system accent color and has a rounded appearance.
+
 use std::sync::OnceLock;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -17,12 +22,19 @@ use windows::core::{BOOL, PCWSTR, w};
 
 use crate::windows_lib::get_accent_color;
 
+/// Maximum number of workspaces supported.
 pub const STATUSBAR_MAX_WORKSPACES: u8 = 9;
+/// Number of workspace dots visible at once (scrolling window).
 pub const STATUSBAR_VISIBLE_DOTS: u8 = 5;
+/// Height of the status bar in pixels.
 pub const STATUSBAR_HEIGHT: i32 = 16;
+/// Width of the status bar in pixels.
 pub const STATUSBAR_WIDTH: i32 = 150;
+/// Gap above the status bar.
 pub const STATUSBAR_TOP_GAP: i32 = 2;
+/// Gap below the status bar.
 pub const STATUSBAR_BOTTOM_GAP: i32 = 4;
+/// Total vertical space reserved for the status bar area.
 pub const STATUSBAR_VERTICAL_RESERVE: i32 =
     STATUSBAR_TOP_GAP + STATUSBAR_HEIGHT + STATUSBAR_BOTTOM_GAP;
 
@@ -36,6 +48,7 @@ const INACTIVE_GREY: u8 = 180;
 static STATUSBAR_CLASS: OnceLock<Result<(), String>> = OnceLock::new();
 const STATUSBAR_CLASS_NAME: PCWSTR = w!("MegaTileStatusBar");
 
+/// Internal state for status bar rendering.
 #[derive(Debug)]
 struct StatusBarState {
     active_workspace: u8,
@@ -43,12 +56,16 @@ struct StatusBarState {
     accent_color: u32,
 }
 
+/// A floating status bar showing workspace indicators.
 pub struct StatusBar {
+    /// Window handle for the status bar.
     hwnd: HWND,
+    /// Rendering state (boxed to allow passing pointer to window).
     state: Box<StatusBarState>,
 }
 
 impl StatusBar {
+    /// Creates a new status bar owned by the given window.
     pub fn new(owner_hwnd: HWND) -> Result<Self, String> {
         let hinstance = unsafe {
             GetModuleHandleW(None).map_err(|e| format!("Failed to get module handle: {}", e))
@@ -86,6 +103,7 @@ impl StatusBar {
         Ok(statusbar)
     }
 
+    /// Sets the position and size of the status bar.
     pub fn set_position(&self, x: i32, y: i32, width: i32, height: i32) {
         unsafe {
             let _ = SetWindowPos(
@@ -101,6 +119,7 @@ impl StatusBar {
         }
     }
 
+    /// Updates the workspace indicator display.
     pub fn update_indicator(&mut self, active_workspace: u8, total_workspaces: u8) {
         self.state.active_workspace = active_workspace.clamp(1, STATUSBAR_MAX_WORKSPACES);
         self.state.total_workspaces = total_workspaces.clamp(1, STATUSBAR_MAX_WORKSPACES);
@@ -108,22 +127,25 @@ impl StatusBar {
             self.state.accent_color = color;
         }
         unsafe {
-            InvalidateRect(Some(self.hwnd), None, BOOL(0).into());
+            let _ = InvalidateRect(Some(self.hwnd), None, BOOL(0).into());
         }
     }
 
+    /// Shows the status bar.
     pub fn show(&self) {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOW);
         }
     }
 
+    /// Hides the status bar.
     pub fn hide(&self) {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
     }
 
+    /// Returns the window handle.
     pub fn get_hwnd(&self) -> HWND {
         self.hwnd
     }

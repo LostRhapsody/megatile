@@ -1,13 +1,26 @@
+//! Tiling layout algorithms and data structures.
+//!
+//! This module implements a dwindle-style tiling algorithm where windows
+//! are recursively split into halves, alternating between horizontal
+//! and vertical splits based on the available space aspect ratio.
+
 use crate::statusbar::STATUSBAR_VERTICAL_RESERVE;
 use crate::workspace::{Monitor, Window};
 use windows::Win32::Foundation::RECT;
 
+/// Direction of a tile split.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SplitDirection {
+    /// Split into top and bottom regions.
     Horizontal,
+    /// Split into left and right regions.
     Vertical,
 }
 
+/// A node in the tiling layout tree.
+///
+/// Tiles form a binary tree structure where each non-leaf tile is split
+/// into two children. Leaf tiles contain the actual windows.
 #[derive(Debug, Clone)]
 pub struct Tile {
     pub rect: RECT,
@@ -18,6 +31,7 @@ pub struct Tile {
 }
 
 impl Tile {
+    /// Creates a new tile with the given bounds.
     pub fn new(rect: RECT) -> Self {
         Tile {
             rect,
@@ -28,20 +42,30 @@ impl Tile {
         }
     }
 
+    /// Returns true if this tile has no children (is a leaf node).
     pub fn is_leaf(&self) -> bool {
         self.children.is_none()
     }
 }
 
+/// Implements the dwindle tiling algorithm.
+///
+/// Windows are placed by recursively splitting the available space,
+/// alternating between horizontal and vertical splits based on aspect ratio.
 pub struct DwindleTiler {
+    /// Gap in pixels between tiled windows.
     gap: i32,
 }
 
 impl DwindleTiler {
+    /// Creates a new tiler with the specified gap between windows.
     pub fn new(gap: i32) -> Self {
         DwindleTiler { gap }
     }
 
+    /// Calculates and applies tiling layout to windows on a monitor.
+    ///
+    /// Reuses the existing layout tree if possible, otherwise creates a new one.
     pub fn tile_windows(
         &self,
         monitor: &Monitor,
@@ -108,6 +132,7 @@ impl DwindleTiler {
         );
     }
 
+    /// Calculates the usable work area for tiling on a monitor.
     fn get_work_area(&self, monitor: &Monitor) -> RECT {
         // For now, use full monitor rect
         // TODO: Consider taskbar and other reserved areas
@@ -123,6 +148,7 @@ impl DwindleTiler {
         rect
     }
 
+    /// Assigns windows to the tile tree and triggers recursive splitting.
     fn distribute_windows(&self, tile: &mut Tile, windows: &[Window]) {
         // Count active windows and collect their hwnds
         let window_hwnds: Vec<isize> = windows
@@ -158,6 +184,7 @@ impl DwindleTiler {
         println!("DEBUG: Recursive tile splitting completed");
     }
 
+    /// Recursively splits a tile based on window count and aspect ratio.
     fn split_tile(&self, tile: &mut Tile, window_count: usize) {
         println!(
             "DEBUG: Splitting tile with {} windows, rect {:?}",
@@ -238,6 +265,7 @@ impl DwindleTiler {
         println!("DEBUG: Tile splitting completed for this level");
     }
 
+    /// Splits a rectangle into two parts based on direction and ratio.
     fn split_rect(&self, rect: &RECT, direction: SplitDirection, ratio: f32) -> (RECT, RECT) {
         let gap = self.gap;
         let mid_gap = gap / 2;
@@ -290,6 +318,7 @@ impl DwindleTiler {
         }
     }
 
+    /// Checks if an existing layout tree can be reused for the current windows.
     fn can_reuse_layout(&self, tile: &Tile, tiled_windows: &[isize]) -> bool {
         let tile_windows: Vec<_> = self
             .collect_tile_windows(tile)
@@ -300,6 +329,7 @@ impl DwindleTiler {
             && tile_windows.iter().all(|hwnd| tiled_windows.contains(hwnd))
     }
 
+    /// Collects all window handles from a tile tree.
     fn collect_tile_windows(&self, tile: &Tile) -> Vec<Vec<isize>> {
         let mut result = Vec::new();
         self.collect_tile_windows_recursive(tile, &mut result);
@@ -315,6 +345,7 @@ impl DwindleTiler {
         }
     }
 
+    /// Updates rectangle positions throughout the tile tree.
     fn update_tree_rects(&self, tile: &mut Tile) {
         if let Some(ref mut children) = tile.children {
             let (left_rect, right_rect) =
@@ -326,6 +357,7 @@ impl DwindleTiler {
         }
     }
 
+    /// Applies tile rectangles to window positions.
     fn apply_tile_positions(&self, tile: &Tile, windows: &mut [Window]) {
         if tile.is_leaf() {
             println!(

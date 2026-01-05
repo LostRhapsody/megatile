@@ -1,11 +1,18 @@
+//! Global hotkey registration and action mapping.
+//!
+//! This module handles registering system-wide hotkeys with Windows
+//! and mapping them to [`HotkeyAction`] values for the window manager.
+
 use std::collections::HashMap;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
+/// Manages global hotkey registration and lookup.
 pub struct HotkeyManager {
     registered_hotkeys: HashMap<i32, HotkeyAction>,
 }
 
+/// Actions that can be triggered by hotkeys.
 #[derive(Debug, Clone, Copy)]
 pub enum HotkeyAction {
     // Focus movement
@@ -42,14 +49,33 @@ pub enum HotkeyAction {
 }
 
 impl HotkeyManager {
+    /// Creates a new hotkey manager.
     pub fn new() -> Self {
         Self {
             registered_hotkeys: HashMap::new(),
         }
     }
 
+    /// Registers all hotkeys with Windows.
+    ///
+    /// # Hotkey Bindings
+    /// - `Alt + Arrows`: Move focus
+    /// - `Alt + Shift + Arrows`: Move window
+    /// - `Alt + 1-9`: Switch workspace
+    /// - `Alt + Shift + 1-9`: Move window to workspace
+    /// - `Alt + Ctrl + Shift + 1-9`: Move window to workspace and follow
+    /// - `Alt + +/-`: Resize horizontally
+    /// - `Alt + Shift + +/-`: Resize vertically
+    /// - `Alt + J`: Flip region
+    /// - `Alt + W`: Close window
+    /// - `Alt + T`: Toggle tiling
+    /// - `Alt + F`: Toggle fullscreen
+    /// - `Alt + B`: Toggle status bar
     pub fn register_hotkeys(&mut self, hwnd: HWND) -> Result<(), String> {
-        let hotkeys = [
+        // Virtual key codes for number keys 1-9
+        const VK_NUMS: [VIRTUAL_KEY; 9] = [VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9];
+
+        let mut hotkeys: Vec<(HOT_KEY_MODIFIERS, VIRTUAL_KEY, i32, HotkeyAction)> = vec![
             // Focus movement (Alt + Arrows)
             (MOD_ALT, VK_LEFT, 1, HotkeyAction::FocusLeft),
             (MOD_ALT, VK_RIGHT, 2, HotkeyAction::FocusRight),
@@ -60,169 +86,71 @@ impl HotkeyManager {
             (MOD_ALT | MOD_SHIFT, VK_RIGHT, 6, HotkeyAction::MoveRight),
             (MOD_ALT | MOD_SHIFT, VK_UP, 7, HotkeyAction::MoveUp),
             (MOD_ALT | MOD_SHIFT, VK_DOWN, 8, HotkeyAction::MoveDown),
-            // Workspace switching (Alt + 1-9)
-            (MOD_ALT, VK_1, 10, HotkeyAction::SwitchWorkspace(1)),
-            (MOD_ALT, VK_2, 11, HotkeyAction::SwitchWorkspace(2)),
-            (MOD_ALT, VK_3, 12, HotkeyAction::SwitchWorkspace(3)),
-            (MOD_ALT, VK_4, 13, HotkeyAction::SwitchWorkspace(4)),
-            (MOD_ALT, VK_5, 14, HotkeyAction::SwitchWorkspace(5)),
-            (MOD_ALT, VK_6, 15, HotkeyAction::SwitchWorkspace(6)),
-            (MOD_ALT, VK_7, 16, HotkeyAction::SwitchWorkspace(7)),
-            (MOD_ALT, VK_8, 17, HotkeyAction::SwitchWorkspace(8)),
-            (MOD_ALT, VK_9, 18, HotkeyAction::SwitchWorkspace(9)),
-            // Move to workspace (Alt + Shift + 1-9)
-            (
-                MOD_ALT | MOD_SHIFT,
-                VK_1,
-                19,
-                HotkeyAction::MoveToWorkspace(1),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT,
-                VK_2,
-                20,
-                HotkeyAction::MoveToWorkspace(2),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT,
-                VK_3,
-                21,
-                HotkeyAction::MoveToWorkspace(3),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT,
-                VK_4,
-                22,
-                HotkeyAction::MoveToWorkspace(4),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT,
-                VK_5,
-                23,
-                HotkeyAction::MoveToWorkspace(5),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT,
-                VK_6,
-                24,
-                HotkeyAction::MoveToWorkspace(6),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT,
-                VK_7,
-                25,
-                HotkeyAction::MoveToWorkspace(7),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT,
-                VK_8,
-                26,
-                HotkeyAction::MoveToWorkspace(8),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT,
-                VK_9,
-                27,
-                HotkeyAction::MoveToWorkspace(9),
-            ),
             // Window resizing
             (
                 MOD_ALT,
                 VIRTUAL_KEY(0xBB),
                 28,
                 HotkeyAction::ResizeHorizontalIncrease,
-            ), // +
+            ),
             (
                 MOD_ALT,
                 VIRTUAL_KEY(0xBD),
                 29,
                 HotkeyAction::ResizeHorizontalDecrease,
-            ), // -
+            ),
             (
                 MOD_ALT | MOD_SHIFT,
                 VIRTUAL_KEY(0xBB),
                 30,
                 HotkeyAction::ResizeVerticalIncrease,
-            ), // Shift++
+            ),
             (
                 MOD_ALT | MOD_SHIFT,
                 VIRTUAL_KEY(0xBD),
                 31,
                 HotkeyAction::ResizeVerticalDecrease,
-            ), // Shift+-
-            // Layout operations
-            (MOD_ALT, VIRTUAL_KEY(0x4A), 32, HotkeyAction::FlipRegion), // J
-            // Window operations
-            (MOD_ALT, VIRTUAL_KEY(0x57), 33, HotkeyAction::CloseWindow), // W
-            (MOD_ALT, VIRTUAL_KEY(0x54), 34, HotkeyAction::ToggleTiling), // T
+            ),
+            // Layout and window operations
+            (MOD_ALT, VIRTUAL_KEY(0x4A), 32, HotkeyAction::FlipRegion),
+            (MOD_ALT, VIRTUAL_KEY(0x57), 33, HotkeyAction::CloseWindow),
+            (MOD_ALT, VIRTUAL_KEY(0x54), 34, HotkeyAction::ToggleTiling),
             (
                 MOD_ALT,
                 VIRTUAL_KEY(0x46),
                 35,
                 HotkeyAction::ToggleFullscreen,
-            ), // F
+            ),
             (
                 MOD_ALT,
                 VIRTUAL_KEY(0x42),
                 45,
                 HotkeyAction::ToggleStatusBar,
-            ), // B
-            // Move to workspace and follow (Alt + Ctrl + Shift + 1-9)
-            (
-                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
-                VK_1,
-                36,
-                HotkeyAction::MoveToWorkspaceFollow(1),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
-                VK_2,
-                37,
-                HotkeyAction::MoveToWorkspaceFollow(2),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
-                VK_3,
-                38,
-                HotkeyAction::MoveToWorkspaceFollow(3),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
-                VK_4,
-                39,
-                HotkeyAction::MoveToWorkspaceFollow(4),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
-                VK_5,
-                40,
-                HotkeyAction::MoveToWorkspaceFollow(5),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
-                VK_6,
-                41,
-                HotkeyAction::MoveToWorkspaceFollow(6),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
-                VK_7,
-                42,
-                HotkeyAction::MoveToWorkspaceFollow(7),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
-                VK_8,
-                43,
-                HotkeyAction::MoveToWorkspaceFollow(8),
-            ),
-            (
-                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
-                VK_9,
-                44,
-                HotkeyAction::MoveToWorkspaceFollow(9),
             ),
         ];
+
+        // Add workspace hotkeys (1-9) using iteration
+        for (i, &vk) in VK_NUMS.iter().enumerate() {
+            let ws = (i + 1) as u8;
+            hotkeys.push((
+                MOD_ALT,
+                vk,
+                10 + i as i32,
+                HotkeyAction::SwitchWorkspace(ws),
+            ));
+            hotkeys.push((
+                MOD_ALT | MOD_SHIFT,
+                vk,
+                19 + i as i32,
+                HotkeyAction::MoveToWorkspace(ws),
+            ));
+            hotkeys.push((
+                MOD_ALT | MOD_SHIFT | MOD_CONTROL,
+                vk,
+                36 + i as i32,
+                HotkeyAction::MoveToWorkspaceFollow(ws),
+            ));
+        }
 
         for (modifiers, vk, id, action) in hotkeys {
             unsafe {
@@ -245,10 +173,12 @@ impl HotkeyManager {
         Ok(())
     }
 
+    /// Returns the action associated with a hotkey ID.
     pub fn get_action(&self, hotkey_id: i32) -> Option<HotkeyAction> {
         self.registered_hotkeys.get(&hotkey_id).copied()
     }
 
+    /// Unregisters all hotkeys.
     pub fn unregister_all(&self, hwnd: HWND) {
         for id in self.registered_hotkeys.keys() {
             unsafe {
