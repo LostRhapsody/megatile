@@ -1,66 +1,75 @@
 # MegaTile
 
-A blazingly fast, lightweight, and strongly opinionated tiling window manager for Windows.
+An opinionated tiling manager for windows.
 
 ## Overview
 
-MegaTile is a minimalist tiling window manager built with Rust that uses the Windows API directly for maximum performance and minimal dependencies. It's designed for power users who want a streamlined window management experience without the bloat of full-featured alternatives.
+MegaTile is a minimalist tiling manager that does the bare minimum to be effective. It has a standardized set of keybinds, a very small status bar, and a single tiling algorithm.
 
-## Goals
+MegaTile will **not** suite everyone.
 
-- **Speed**: Instant response times with minimal overhead
-- **Lightweight**: No unnecessary dependencies, just Windows API + Rust
-- **Opinionated**: Fixed keybindings and behaviors, no configuration needed
-- **Simplicity**: Focus on core tiling functionality without feature creep
+## MegaTile Features and Goals
 
-## Technologies
+MegaTile aims to be simple, fast, and effective.
 
-- **Language**: Rust
-- **Window Management**: Windows API (winapi/windows-rs)
-- **Tiling Algorithm**: Dwindle (binary space partitioning)
-- **System Integration**: System tray application
-- **Hotkeys**: Windows key (Super) as primary modifier
+- **Fast**: Rust with bindings for the Window's API via `windows-rs`. Minimal dependencies and responsibilities.
+- **Simple**: We manage windows, workspaces, and keybinds to control them, nothing else.
+- **Effective**: Manage 1-9 workspaces. Near instant response time. No animations, no lag.
+- **System Tray**: Runs in the system tray, right click the icon to exit.
+- **Filtering**: Doing our best to filter windows we don't want to tile.
+- **Mutliple Monitors**: Full support for multiple monitors. All monitors share the same workspace.
+- **Dwindle Tiling**: Efficient binary space partitioning. Just the one algorithm.
 
 ## Keybindings
 
 | Keybinding | Action |
 |------------|--------|
-| `Win + Arrows` | Move focus between windows |
-| `Win + Shift + Arrows` | Move windows to different tiles |
-| `Win + 1-9` | Switch to workspace 1-9 |
-| `Win + Shift + 1-9` | Move focused window to workspace 1-9 |
-| `Win + W` | Close current window |
-| `Win + T` | Toggle tiling algorithm |
-| `Win + F` | Toggle fullscreen |
-
-## Features
-
-- **9 Workspaces**: Shared across all monitors
-- **Dwindle Tiling**: Efficient binary space partitioning
-- **Multi-Monitor**: Independent tiling on each monitor within same workspace
-- **Window Filtering**: Only normal windows are tiled (excludes taskbar, dialogs, popups)
-- **Workspace Isolation**: Windows from inactive workspaces are completely hidden (not visible in taskbar)
-- **System Tray**: Easy access to exit and auto-start options
-
-## Architecture
-
-- **Window Monitor**: Tracks and filters all normal windows
-- **Workspace Manager**: Manages 9 workspaces with per-monitor state
-- **Tiling Engine**: Implements Dwindle algorithm for efficient space usage
-- **Input Handler**: Registers and processes global hotkeys
-- **Window Hider**: Shows/hides windows on workspace switches
-- **System Tray**: Provides tray icon and menu
+| `Alt + Arrows` | Move focus between windows |
+| `Alt + Shift + Arrows` | Move windows to different tiles |
+| `Alt + 1-9` | Switch to workspace 1-9 |
+| `Alt + Shift + 1-9` | Move focused window to workspace 1-9 |
+| `Alt + W` | Close current window |
+| `Alt + T` | Toggle current window's tiling state |
+| `Alt + F` | Toggle fullscreen |
 
 ## Status
 
-**Development Phase**: Implementation (STEP_7)
+**Beta**: Feel free to use it, it's nearly feature complete, but most likely buggy.
 
-See [PLAN.md](PLAN.md) for the implementation roadmap.
+## Installation
 
-## Getting Started
+There is no installer or binary distribution at the moment. 
 
-Once complete, MegaTile will be available as a standalone Windows executable. Run it to start the system tray icon, and it will automatically begin tiling windows.
+Prequisites:
+
+- Rust installed, with dependencies
+- Windows OS
+- Git installed
+
+Follow these steps:
+
+- `git clone` the repository
+- `cd megatile`
+- `cargo build --release`
+- `./target/release/megatile.exe`
+
+MegaTile will now be running in the background, you can turn it off by finding the orange square in the system tray, right clicking it, and selecting exit.
+
+## Contributing
+
+Contributions are welcome, with the caveat that the project is intentionally opinionated and minimal.
+
+- Bug reports and issue descriptions with clear reproduction steps are very helpful.
+- Pull requests should stay aligned with the project's direction.
+- Features that add significant complexity or configurability may be declined if they conflict with the project’s philosophy.
+
+Before working on a larger change, consider opening a discussion to talk about the idea.
 
 ## License
 
-TBD
+This project is **source‑available, non‑commercial**.
+
+- The source is freely accessible and may be used and modified for non‑commercial purposes.
+- Commercial use (including using MegaTile as part of a paid product or service) requires a separate commercial license from the author.
+
+If you are interested in commercial use, please contact the author to discuss licensing terms.
