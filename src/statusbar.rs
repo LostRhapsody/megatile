@@ -2,15 +2,26 @@
 //!
 //! Displays a floating bar showing workspace indicators with numbers,
 //! and the current date/time. Uses the system accent color with a dimmed backdrop.
+//! Renders using GDI+ for anti-aliased edges and smooth rendering.
 
 use std::sync::OnceLock;
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, SYSTEMTIME, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteObject,
-    Ellipse, EndPaint, HBRUSH, HDC, HFONT, HPEN, InvalidateRect, PAINTSTRUCT, PS_SOLID, RoundRect,
-    SelectObject, SetBkMode, SetTextColor, SetWindowRgn, TRANSPARENT, TextOutW,
+    BeginPaint, CreateRoundRectRgn, EndPaint, InvalidateRect, PAINTSTRUCT, SetWindowRgn,
+};
+use windows::Win32::Graphics::GdiPlus::{
+    GdipCreateFont, GdipCreateFontFamilyFromName, GdipCreateFromHDC, GdipCreatePen1,
+    GdipCreateSolidFill, GdipCreateStringFormat, GdipDeleteBrush, GdipDeleteFont,
+    GdipDeleteFontFamily, GdipDeleteGraphics, GdipDeletePen, GdipDeleteStringFormat,
+    GdipDrawRectangle, GdipDrawString, GdipFillEllipse, GdipFillRectangle, GdipSetSmoothingMode,
+    GdipSetStringFormatAlign, GdipSetStringFormatLineAlign, GdipSetTextRenderingHint,
+    GdiplusShutdown, GdiplusStartup, GdiplusStartupInput, GpBrush, GpFontFamily, GpGraphics, GpPen,
+    GpSolidFill, GpStringFormat, SmoothingModeHighQuality, StringAlignmentCenter,
+    TextRenderingHintClearTypeGridFit, Unit,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
     GetClientRect, GetWindowLongPtrW, HMENU, HWND_TOPMOST, IDC_ARROW, LoadCursorW, RegisterClassW,
@@ -48,6 +59,9 @@ const ALWAYS_SHOW_WORKSPACES: u8 = 5; // Workspaces 1-5 always shown
 static STATUSBAR_CLASS: OnceLock<Result<(), String>> = OnceLock::new();
 const STATUSBAR_CLASS_NAME: PCWSTR = w!("MegaTileStatusBar");
 
+/// GDI+ token for initialization/shutdown.
+static mut GDIPLUS_TOKEN: usize = 0;
+
 /// Internal state for status bar rendering.
 #[derive(Debug)]
 struct StatusBarState {
@@ -55,8 +69,7 @@ struct StatusBarState {
     total_workspaces: u8,
     accent_color: u32,
     /// Cached time string for display.
-    time_string: [u16; 16],
-    time_string_len: usize,
+    time_string: String,
     /// Bitmask for workspaces 6-9 that have windows (bit 0 = ws6, bit 1 = ws7, etc)
     occupied_workspaces_6_9: u8,
 }
@@ -67,6 +80,35 @@ pub struct StatusBar {
     hwnd: HWND,
     /// Rendering state (boxed to allow passing pointer to window).
     state: Box<StatusBarState>,
+}
+
+/// Initializes GDI+. Must be called before creating any StatusBar.
+pub fn init_gdiplus() -> Result<(), String> {
+    unsafe {
+        let input = GdiplusStartupInput {
+            GdiplusVersion: 1,
+            DebugEventCallback: 0,
+            SuppressBackgroundThread: BOOL(0),
+            SuppressExternalCodecs: BOOL(0),
+        };
+        let mut token: usize = 0;
+        let status = GdiplusStartup(&mut token, &input, std::ptr::null_mut());
+        if status.0 != 0 {
+            return Err(format!("GdiplusStartup failed with status: {}", status.0));
+        }
+        GDIPLUS_TOKEN = token;
+        Ok(())
+    }
+}
+
+/// Shuts down GDI+. Call when application exits.
+pub fn shutdown_gdiplus() {
+    unsafe {
+        if GDIPLUS_TOKEN != 0 {
+            GdiplusShutdown(GDIPLUS_TOKEN);
+            GDIPLUS_TOKEN = 0;
+        }
+    }
 }
 
 impl StatusBar {
@@ -82,8 +124,7 @@ impl StatusBar {
             active_workspace: 1,
             total_workspaces: STATUSBAR_MAX_WORKSPACES,
             accent_color,
-            time_string: [0u16; 16],
-            time_string_len: 0,
+            time_string: String::new(),
             occupied_workspaces_6_9: 0,
         });
         update_time_string(&mut state);
@@ -233,75 +274,15 @@ extern "system" fn statusbar_wnd_proc(
     }
 }
 
-/// Updates the time string in the state with current time.
+/// Updates the time string in the state with current local time.
 fn update_time_string(state: &mut StatusBarState) {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    // Get current time
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    // Convert to local time components (simple UTC offset approximation)
-    // In a real implementation, you'd use proper timezone handling
-    let secs_per_day = 86400u64;
-    let secs_per_hour = 3600u64;
-    let secs_per_min = 60u64;
-
-    // Days since Unix epoch
-    let days = now / secs_per_day;
-    let time_of_day = now % secs_per_day;
-
-    let hours = (time_of_day / secs_per_hour) % 24;
-    let minutes = (time_of_day % secs_per_hour) / secs_per_min;
-
-    // Calculate date (simplified - days since 1970-01-01)
-    // This is a simplified calculation that doesn't account for leap years perfectly
-    let mut remaining_days = days as i64;
-    let mut year = 1970i32;
-
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        year += 1;
-    }
-
-    let days_in_months: [i64; 12] = if is_leap_year(year) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 1u32;
-    for days_in_month in days_in_months.iter() {
-        if remaining_days < *days_in_month {
-            break;
-        }
-        remaining_days -= days_in_month;
-        month += 1;
-    }
-    let day = remaining_days + 1;
+    let st: SYSTEMTIME = unsafe { GetLocalTime() };
 
     // Format: "HH:MM DD/MM"
-    let time_str = format!("{:02}:{:02} {:02}/{:02}", hours, minutes, day, month);
-
-    // Convert to UTF-16
-    let mut i = 0;
-    for ch in time_str.encode_utf16() {
-        if i < state.time_string.len() {
-            state.time_string[i] = ch;
-            i += 1;
-        }
-    }
-    state.time_string_len = i;
-}
-
-fn is_leap_year(year: i32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+    state.time_string = format!(
+        "{:02}:{:02} {:02}/{:02}",
+        st.wHour, st.wMinute, st.wDay, st.wMonth
+    );
 }
 
 unsafe fn paint_statusbar(hwnd: HWND) {
@@ -322,181 +303,304 @@ unsafe fn paint_statusbar(hwnd: HWND) {
         let mut rect = RECT::default();
         let _ = GetClientRect(hwnd, &mut rect);
 
-        draw_background(hdc, &rect, state.accent_color);
-        draw_workspace_dots(hdc, &rect, state);
-        draw_time(hdc, &rect, state);
+        // Create GDI+ Graphics object from HDC
+        let mut graphics: *mut GpGraphics = std::ptr::null_mut();
+        if GdipCreateFromHDC(hdc, &mut graphics).0 != 0 || graphics.is_null() {
+            let _ = EndPaint(hwnd, &ps);
+            return;
+        }
 
+        // Enable anti-aliasing
+        let _ = GdipSetSmoothingMode(graphics, SmoothingModeHighQuality);
+        let _ = GdipSetTextRenderingHint(graphics, TextRenderingHintClearTypeGridFit);
+
+        draw_background_gdiplus(graphics, &rect, state.accent_color);
+        draw_workspace_dots_gdiplus(graphics, &rect, state);
+        draw_time_gdiplus(graphics, &rect, state);
+
+        // Cleanup
+        GdipDeleteGraphics(graphics);
         let _ = EndPaint(hwnd, &ps);
-    };
+    }
 }
 
-unsafe fn draw_background(hdc: HDC, rect: &RECT, accent_color: u32) {
-    let bg_color = dimmed_desaturated_background(accent_color);
+unsafe fn draw_background_gdiplus(graphics: *mut GpGraphics, rect: &RECT, accent_color: u32) {
     unsafe {
-        let brush = CreateSolidBrush(COLORREF(bg_color));
-        // Use a slightly darker border
-        let border_color = darken_color(bg_color, 0.85);
-        let pen = CreatePen(PS_SOLID, 2, COLORREF(border_color));
+        let bg_color = dimmed_desaturated_background(accent_color);
+        let (r, g, b) = split_color(bg_color);
 
-        let old_pen = SelectObject(hdc, pen.into());
-        let old_brush = SelectObject(hdc, brush.into());
+        // Create fill brush for background
+        let mut brush: *mut GpSolidFill = std::ptr::null_mut();
+        let argb_bg = make_argb(255, r, g, b);
+        if GdipCreateSolidFill(argb_bg, &mut brush).0 != 0 {
+            return;
+        }
 
-        let _ = RoundRect(
-            hdc,
-            rect.left,
-            rect.top,
-            rect.right,
-            rect.bottom,
-            CORNER_RADIUS,
-            CORNER_RADIUS,
+        // Fill the rounded rectangle background
+        // GDI+ doesn't have a direct rounded rectangle, so we fill a regular rect
+        // (the window region already clips to rounded corners)
+        let _ = GdipFillRectangle(
+            graphics,
+            brush as *mut GpBrush,
+            rect.left as f32,
+            rect.top as f32,
+            (rect.right - rect.left) as f32,
+            (rect.bottom - rect.top) as f32,
         );
 
-        SelectObject(hdc, old_pen);
-        SelectObject(hdc, old_brush);
-        let _ = DeleteObject(pen.into());
-        let _ = DeleteObject(brush.into());
-    };
+        // Draw border
+        let border_color = darken_color(bg_color, 0.85);
+        let (br, bg_c, bb) = split_color(border_color);
+        let mut pen: *mut GpPen = std::ptr::null_mut();
+        let argb_border = make_argb(255, br, bg_c, bb);
+        if GdipCreatePen1(argb_border, 2.0, Unit(0), &mut pen).0 == 0 {
+            let _ = GdipDrawRectangle(
+                graphics,
+                pen,
+                rect.left as f32 + 1.0,
+                rect.top as f32 + 1.0,
+                (rect.right - rect.left) as f32 - 2.0,
+                (rect.bottom - rect.top) as f32 - 2.0,
+            );
+            GdipDeletePen(pen);
+        }
+
+        GdipDeleteBrush(brush as *mut GpBrush);
+    }
 }
 
-unsafe fn draw_workspace_dots(hdc: HDC, rect: &RECT, state: &StatusBarState) {
-    // Determine which workspaces to display
-    let mut workspaces_to_show = Vec::with_capacity(9);
+unsafe fn draw_workspace_dots_gdiplus(
+    graphics: *mut GpGraphics,
+    rect: &RECT,
+    state: &StatusBarState,
+) {
+    unsafe {
+        // Determine which workspaces to display
+        let mut workspaces_to_show = Vec::with_capacity(9);
 
-    // Always show workspaces 1-5
-    for i in 1..=ALWAYS_SHOW_WORKSPACES {
-        workspaces_to_show.push(i);
-    }
+        // Always show workspaces 1-5
+        for i in 1..=ALWAYS_SHOW_WORKSPACES {
+            workspaces_to_show.push(i);
+        }
 
-    // Conditionally show workspaces 6-9 if they have windows
-    if state.occupied_workspaces_6_9 & 0x01 != 0 {
-        workspaces_to_show.push(6);
-    }
-    if state.occupied_workspaces_6_9 & 0x02 != 0 {
-        workspaces_to_show.push(7);
-    }
-    if state.occupied_workspaces_6_9 & 0x04 != 0 {
-        workspaces_to_show.push(8);
-    }
-    if state.occupied_workspaces_6_9 & 0x08 != 0 {
-        workspaces_to_show.push(9);
-    }
+        // Conditionally show workspaces 6-9 if they have windows
+        if state.occupied_workspaces_6_9 & 0x01 != 0 {
+            workspaces_to_show.push(6);
+        }
+        if state.occupied_workspaces_6_9 & 0x02 != 0 {
+            workspaces_to_show.push(7);
+        }
+        if state.occupied_workspaces_6_9 & 0x04 != 0 {
+            workspaces_to_show.push(8);
+        }
+        if state.occupied_workspaces_6_9 & 0x08 != 0 {
+            workspaces_to_show.push(9);
+        }
 
-    // Start at left with padding
-    let start_x = rect.left + PADDING_LEFT;
-    let center_y = rect.top + PADDING_VERTICAL;
+        // Start at left with padding
+        let start_x = rect.left + PADDING_LEFT;
+        let center_y = rect.top + PADDING_VERTICAL;
 
-    // Create font for workspace numbers
-    let font = unsafe { create_small_font() };
-    let old_font = unsafe { SelectObject(hdc, font.into()) };
-    let _ = unsafe { SetBkMode(hdc, TRANSPARENT) };
+        // Create font for workspace numbers
+        let font_family = create_font_family();
+        let font = create_font(font_family, 10.0);
+        let string_format = create_centered_string_format();
 
-    for (index, workspace_id) in workspaces_to_show.iter().enumerate() {
-        let x = start_x + (index as i32) * DOT_SPACING;
-        let is_active = *workspace_id == state.active_workspace;
+        for (index, workspace_id) in workspaces_to_show.iter().enumerate() {
+            let x = start_x + (index as i32) * DOT_SPACING;
+            let is_active = *workspace_id == state.active_workspace;
 
-        // Draw the dot
-        let (dot_color, text_color) = if is_active {
-            // Active: opaque accent color dot, no text
-            (state.accent_color, state.accent_color)
-        } else {
-            // Inactive: semi-transparent dot, muted gray text
-            (
-                semi_transparent_dot_color(state.accent_color),
-                0x00888888_u32,
-            )
-        };
+            // Get dot color and text color
+            let (dot_color, text_color) = if is_active {
+                (state.accent_color, state.accent_color) // Active: accent color, text same (hidden)
+            } else {
+                (
+                    semi_transparent_dot_color(state.accent_color),
+                    0x00888888_u32,
+                )
+            };
 
-        unsafe {
-            let brush: HBRUSH = CreateSolidBrush(COLORREF(dot_color));
-            let pen: HPEN = CreatePen(PS_SOLID, 1, COLORREF(dot_color));
-            let old_pen = SelectObject(hdc, pen.into());
-            let old_brush = SelectObject(hdc, brush.into());
+            // Draw the ellipse (dot)
+            let (dr, dg, db) = split_color(dot_color);
+            let mut dot_brush: *mut GpSolidFill = std::ptr::null_mut();
+            if GdipCreateSolidFill(make_argb(255, dr, dg, db), &mut dot_brush).0 == 0 {
+                let _ = GdipFillEllipse(
+                    graphics,
+                    dot_brush as *mut GpBrush,
+                    x as f32,
+                    center_y as f32,
+                    DOT_DIAMETER as f32,
+                    DOT_DIAMETER as f32,
+                );
+                GdipDeleteBrush(dot_brush as *mut GpBrush);
+            }
 
-            let _ = Ellipse(hdc, x, center_y, x + DOT_DIAMETER, center_y + DOT_DIAMETER);
+            // Draw the workspace number inside the dot
+            if !font.is_null() && !string_format.is_null() {
+                let (tr, tg, tb) = split_color(text_color);
+                let mut text_brush: *mut GpSolidFill = std::ptr::null_mut();
+                if GdipCreateSolidFill(make_argb(255, tr, tg, tb), &mut text_brush).0 == 0 {
+                    let num_str: Vec<u16> = format!("{}", workspace_id)
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
 
-            SelectObject(hdc, old_pen);
-            SelectObject(hdc, old_brush);
-            let _ = DeleteObject(pen.into());
-            let _ = DeleteObject(brush.into());
+                    // Create a rect for the text centered in the dot
+                    let text_rect = windows::Win32::Graphics::GdiPlus::RectF {
+                        X: x as f32,
+                        Y: center_y as f32,
+                        Width: DOT_DIAMETER as f32,
+                        Height: DOT_DIAMETER as f32,
+                    };
 
-            // Draw the workspace number inside the dot (centered)
-            let _ = SetTextColor(hdc, COLORREF(text_color));
-            let num_char = [b'0' as u16 + *workspace_id as u16];
-            // Center the number in the dot
-            let text_x = x + (DOT_DIAMETER - 5) / 2;
-            let text_y = center_y + (DOT_DIAMETER - 14) / 2;
-            let _ = TextOutW(hdc, text_x, text_y, &num_char);
+                    let _ = GdipDrawString(
+                        graphics,
+                        PCWSTR::from_raw(num_str.as_ptr()),
+                        -1,
+                        font,
+                        &text_rect,
+                        string_format,
+                        text_brush as *mut GpBrush,
+                    );
+                    GdipDeleteBrush(text_brush as *mut GpBrush);
+                }
+            }
+        }
+
+        // Cleanup
+        if !string_format.is_null() {
+            GdipDeleteStringFormat(string_format);
+        }
+        if !font.is_null() {
+            GdipDeleteFont(font);
+        }
+        if !font_family.is_null() {
+            GdipDeleteFontFamily(font_family);
         }
     }
-
-    unsafe { SelectObject(hdc, old_font) };
-    let _ = unsafe { DeleteObject(font.into()) };
 }
 
-unsafe fn draw_time(hdc: HDC, rect: &RECT, state: &StatusBarState) {
-    if state.time_string_len == 0 {
-        return;
-    }
-
-    // Create font for time display
-    let font = unsafe { create_med_font() };
-    let old_font = unsafe { SelectObject(hdc, font.into()) };
-    let _ = unsafe { SetBkMode(hdc, TRANSPARENT) };
-    // Use a muted color for the time text (not bright white)
-    let _ = unsafe { SetTextColor(hdc, COLORREF(0x00AAAAAA)) };
-
-    // Position time at far right
-    let time_width = (state.time_string_len as i32) * 7; // Approximate character width
-    let x = rect.right - PADDING_RIGHT - time_width;
-    let y = rect.top + PADDING_VERTICAL + (DOT_DIAMETER - 22) / 2;
-
+unsafe fn draw_time_gdiplus(graphics: *mut GpGraphics, rect: &RECT, state: &StatusBarState) {
     unsafe {
-        let _ = TextOutW(hdc, x, y, &state.time_string[..state.time_string_len]);
-    }
+        if state.time_string.is_empty() {
+            return;
+        }
 
-    unsafe { SelectObject(hdc, old_font) };
-    let _ = unsafe { DeleteObject(font.into()) };
+        // Create font for time display
+        let font_family = create_font_family();
+        let font = create_font(font_family, 12.0);
+        let string_format = create_right_aligned_string_format();
+
+        if font.is_null() || string_format.is_null() {
+            if !string_format.is_null() {
+                GdipDeleteStringFormat(string_format);
+            }
+            if !font.is_null() {
+                GdipDeleteFont(font);
+            }
+            if !font_family.is_null() {
+                GdipDeleteFontFamily(font_family);
+            }
+            return;
+        }
+
+        // Use a muted color for the time text
+        let mut text_brush: *mut GpSolidFill = std::ptr::null_mut();
+        if GdipCreateSolidFill(make_argb(255, 0xAA, 0xAA, 0xAA), &mut text_brush).0 != 0 {
+            GdipDeleteStringFormat(string_format);
+            GdipDeleteFont(font);
+            GdipDeleteFontFamily(font_family);
+            return;
+        }
+
+        let time_str: Vec<u16> = state
+            .time_string
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
+        // Position time at far right
+        let text_rect = windows::Win32::Graphics::GdiPlus::RectF {
+            X: (rect.right - PADDING_RIGHT - 100) as f32,
+            Y: (rect.top + PADDING_VERTICAL) as f32,
+            Width: 100.0,
+            Height: DOT_DIAMETER as f32,
+        };
+
+        let _ = GdipDrawString(
+            graphics,
+            PCWSTR::from_raw(time_str.as_ptr()),
+            -1,
+            font,
+            &text_rect,
+            string_format,
+            text_brush as *mut GpBrush,
+        );
+
+        // Cleanup
+        GdipDeleteBrush(text_brush as *mut GpBrush);
+        GdipDeleteStringFormat(string_format);
+        GdipDeleteFont(font);
+        GdipDeleteFontFamily(font_family);
+    }
 }
 
-unsafe fn create_small_font() -> HFONT {
+unsafe fn create_font_family() -> *mut GpFontFamily {
     unsafe {
-        CreateFontW(
-            14,                                                      // Height (adjusted for better rendering)
-            0,                                                       // Width (0 = auto)
-            0,                                                       // Escapement
-            0,                                                       // Orientation
-            400,                                                     // Weight (400 = normal)
-            0,                                                       // Italic
-            0,                                                       // Underline
-            0,                                                       // StrikeOut
-            windows::Win32::Graphics::Gdi::FONT_CHARSET(0),          // CharSet
-            windows::Win32::Graphics::Gdi::FONT_OUTPUT_PRECISION(3), // OutPrecision (3 = TT_ONLY for smoother rendering)
-            windows::Win32::Graphics::Gdi::FONT_CLIP_PRECISION(0),   // ClipPrecision
-            windows::Win32::Graphics::Gdi::FONT_QUALITY(5), // Quality (5 = CLEARTYPE_QUALITY for smoother rendering)
-            0,                                              // PitchAndFamily
-            w!("Segoe UI"),                                 // Face name
-        )
+        let mut font_family: *mut GpFontFamily = std::ptr::null_mut();
+        let family_name: Vec<u16> = "Segoe UI"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let _ = GdipCreateFontFamilyFromName(
+            PCWSTR::from_raw(family_name.as_ptr()),
+            std::ptr::null_mut(),
+            &mut font_family,
+        );
+        font_family
     }
 }
 
-unsafe fn create_med_font() -> HFONT {
+unsafe fn create_font(
+    font_family: *mut GpFontFamily,
+    size: f32,
+) -> *mut windows::Win32::Graphics::GdiPlus::GpFont {
     unsafe {
-        CreateFontW(
-            20,                                                      // Height (adjusted for better rendering)
-            0,                                                       // Width (0 = auto)
-            0,                                                       // Escapement
-            0,                                                       // Orientation
-            400,                                                     // Weight (400 = normal)
-            0,                                                       // Italic
-            0,                                                       // Underline
-            0,                                                       // StrikeOut
-            windows::Win32::Graphics::Gdi::FONT_CHARSET(0),          // CharSet
-            windows::Win32::Graphics::Gdi::FONT_OUTPUT_PRECISION(3), // OutPrecision (3 = TT_ONLY for smoother rendering)
-            windows::Win32::Graphics::Gdi::FONT_CLIP_PRECISION(0),   // ClipPrecision
-            windows::Win32::Graphics::Gdi::FONT_QUALITY(5), // Quality (5 = CLEARTYPE_QUALITY for smoother rendering)
-            0,                                              // PitchAndFamily
-            w!("Segoe UI"),                                 // Face name
-        )
+        if font_family.is_null() {
+            return std::ptr::null_mut();
+        }
+        let mut font: *mut windows::Win32::Graphics::GdiPlus::GpFont = std::ptr::null_mut();
+        // FontStyleRegular = 0, UnitPoint = 3
+        let _ = GdipCreateFont(font_family, size, 0, Unit(3), &mut font);
+        font
+    }
+}
+
+unsafe fn create_centered_string_format() -> *mut GpStringFormat {
+    unsafe {
+        let mut format: *mut GpStringFormat = std::ptr::null_mut();
+        if GdipCreateStringFormat(0, 0, &mut format).0 != 0 {
+            return std::ptr::null_mut();
+        }
+        let _ = GdipSetStringFormatAlign(format, StringAlignmentCenter);
+        let _ = GdipSetStringFormatLineAlign(format, StringAlignmentCenter);
+        format
+    }
+}
+
+unsafe fn create_right_aligned_string_format() -> *mut GpStringFormat {
+    unsafe {
+        let mut format: *mut GpStringFormat = std::ptr::null_mut();
+        if GdipCreateStringFormat(0, 0, &mut format).0 != 0 {
+            return std::ptr::null_mut();
+        }
+        // StringAlignmentFar = 2 for right alignment
+        let _ = GdipSetStringFormatAlign(
+            format,
+            windows::Win32::Graphics::GdiPlus::StringAlignment(2),
+        );
+        let _ = GdipSetStringFormatLineAlign(format, StringAlignmentCenter);
+        format
     }
 }
 
@@ -561,11 +665,18 @@ fn compose_color(r: u8, g: u8, b: u8) -> u32 {
     (b as u32) << 16 | (g as u32) << 8 | r as u32
 }
 
+/// Creates an ARGB color value for GDI+.
+fn make_argb(a: u8, r: u8, g: u8, b: u8) -> u32 {
+    ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+}
+
 unsafe fn get_state_ptr(hwnd: HWND) -> *mut StatusBarState {
-    let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
-    if ptr == 0 {
-        std::ptr::null_mut()
-    } else {
-        ptr as *mut StatusBarState
+    unsafe {
+        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+        if ptr == 0 {
+            std::ptr::null_mut()
+        } else {
+            ptr as *mut StatusBarState
+        }
     }
 }

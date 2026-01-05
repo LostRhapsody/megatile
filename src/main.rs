@@ -46,7 +46,9 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::PCWSTR;
 
 use hotkeys::HotkeyManager;
-use statusbar::{STATUSBAR_HEIGHT, STATUSBAR_TOP_GAP, STATUSBAR_WIDTH, StatusBar};
+use statusbar::{
+    STATUSBAR_HEIGHT, STATUSBAR_TOP_GAP, STATUSBAR_WIDTH, StatusBar, init_gdiplus, shutdown_gdiplus,
+};
 use tray::TrayManager;
 use windows_lib::{
     enumerate_monitors, get_normal_windows, reset_window_decorations, show_window_in_taskbar,
@@ -363,6 +365,9 @@ fn main() {
         .register_hotkeys(hwnd)
         .expect("Failed to register hotkeys");
 
+    // Initialize GDI+ for anti-aliased rendering
+    init_gdiplus().expect("Failed to initialize GDI+");
+
     // Initialize status bar
     let statusbar = StatusBar::new(hwnd).expect("Failed to create status bar");
 
@@ -502,6 +507,7 @@ fn main() {
                         println!("Exiting MegaTile...");
                         cleanup_on_exit(&mut wm);
                         hotkey_manager.unregister_all(hwnd);
+                        shutdown_gdiplus();
                         return;
                     }
                 }
