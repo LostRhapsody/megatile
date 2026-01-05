@@ -220,6 +220,28 @@ impl WorkspaceManager {
             old_workspace, new_workspace
         );
 
+        // Capture currently focused window for the old workspace before switching away
+        if let Some(focused) = self.get_focused_window() {
+            println!(
+                "DEBUG: Current focus is window {:?} in workspace {}",
+                focused.hwnd, focused.workspace
+            );
+            if focused.workspace == old_workspace {
+                let mut monitors = self.monitors.lock().unwrap();
+                for monitor in monitors.iter_mut() {
+                    if let Some(workspace) = monitor.get_workspace_mut(old_workspace) {
+                        if workspace.get_window(HWND(focused.hwnd as _)).is_some() {
+                            workspace.focused_window_hwnd = Some(focused.hwnd);
+                            println!(
+                                "DEBUG: Saved focus target {:?} for old workspace {}",
+                                focused.hwnd, old_workspace
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         // Count windows in old workspace before switching
         let old_workspace_window_count = self.get_workspace_window_count(old_workspace);
         println!(
@@ -281,6 +303,41 @@ impl WorkspaceManager {
             new_workspace
         );
         self.apply_window_positions();
+
+        // Restore focus for the new workspace
+        println!("DEBUG: Restoring focus for workspace {}", new_workspace);
+        let mut focus_target = None;
+        {
+            let monitors = self.monitors.lock().unwrap();
+            for monitor in monitors.iter() {
+                if let Some(workspace) = monitor.get_workspace(new_workspace) {
+                    if let Some(hwnd) = workspace.focused_window_hwnd {
+                        focus_target = Some(HWND(hwnd as _));
+                        println!(
+                            "DEBUG: Found remembered focus target {:?} for workspace {}",
+                            hwnd, new_workspace
+                        );
+                        break;
+                    }
+                    // If no remembered focus, try the first tiled window
+                    if let Some(first_window) = workspace.windows.iter().find(|w| w.is_tiled) {
+                        focus_target = Some(HWND(first_window.hwnd as _));
+                        println!("DEBUG: No remembered focus, using first tiled window {:?} for workspace {}", first_window.hwnd, new_workspace);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(hwnd) = focus_target {
+            println!(
+                "DEBUG: Auto-focusing window {:?} after workspace switch",
+                hwnd.0
+            );
+            self.set_window_focus(hwnd);
+        } else {
+            println!("DEBUG: No window to focus in workspace {}", new_workspace);
+        }
 
         println!("DEBUG: Workspace switch completed successfully");
         Ok(())
@@ -431,9 +488,11 @@ impl WorkspaceManager {
             // Keep window on same monitor (find target workspace on same monitor)
             if let Some(monitor) = monitors.get_mut(source_monitor_idx) {
                 if let Some(workspace) = monitor.get_workspace_mut(new_workspace) {
+                    let hwnd_val = window.hwnd;
                     workspace.add_window(window.clone());
+                    workspace.focused_window_hwnd = Some(hwnd_val); // Ensure moved window is focused
                     println!(
-                        "DEBUG: Added window to target workspace {} on monitor {}",
+                        "DEBUG: Added window to target workspace {} on monitor {} and set as focus target",
                         new_workspace, source_monitor_idx
                     );
                 } else {
@@ -631,23 +690,25 @@ impl WorkspaceManager {
 
         // Find all windows in active workspace on all monitors
         let mut active_windows: Vec<(Window, RECT)> = Vec::new();
-        let monitors = self.monitors.lock().unwrap();
+        {
+            let monitors = self.monitors.lock().unwrap();
 
-        println!("DEBUG: Gathering active windows from all monitors");
-        for (monitor_idx, monitor) in monitors.iter().enumerate() {
-            let active_workspace = monitor.get_active_workspace();
-            println!(
-                "DEBUG: Monitor {} active workspace has {} windows",
-                monitor_idx,
-                active_workspace.windows.len()
-            );
-            for window in &active_workspace.windows {
-                if window.is_tiled {
-                    active_windows.push((window.clone(), window.rect));
-                    println!(
-                        "DEBUG: Active window: hwnd={:?}, rect={:?}",
-                        window.hwnd, window.rect
-                    );
+            println!("DEBUG: Gathering active windows from all monitors");
+            for (monitor_idx, monitor) in monitors.iter().enumerate() {
+                let active_workspace = monitor.get_active_workspace();
+                println!(
+                    "DEBUG: Monitor {} active workspace has {} windows",
+                    monitor_idx,
+                    active_workspace.windows.len()
+                );
+                for window in &active_workspace.windows {
+                    if window.is_tiled {
+                        active_windows.push((window.clone(), window.rect));
+                        println!(
+                            "DEBUG: Active window: hwnd={:?}, rect={:?}",
+                            window.hwnd, window.rect
+                        );
+                    }
                 }
             }
         }
@@ -787,10 +848,29 @@ impl WorkspaceManager {
         result
     }
 
-    fn set_window_focus(&self, hwnd: HWND) {
+    pub fn set_window_focus(&self, hwnd: HWND) {
         use windows::Win32::UI::WindowsAndMessaging::*;
 
         println!("DEBUG: Setting focus to window {:?}", hwnd.0);
+
+        // Update focus memory in the workspace
+        {
+            let mut monitors = self.monitors.lock().unwrap();
+            let mut found = false;
+            for monitor in monitors.iter_mut() {
+                for workspace in &mut monitor.workspaces {
+                    if workspace.get_window(hwnd).is_some() {
+                        workspace.focused_window_hwnd = Some(hwnd.0 as isize);
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
+                    break;
+                }
+            }
+        }
+
         unsafe {
             let result = SetForegroundWindow(hwnd);
             if result.as_bool() {
@@ -1020,6 +1100,26 @@ impl WorkspaceManager {
         // Re-tile active workspace
         self.tile_active_workspaces();
         self.apply_window_positions();
+
+        // Focus the next window in the workspace
+        let active_workspace_num = self.active_workspace_global;
+        let mut next_focus = None;
+        {
+            let monitors = self.monitors.lock().unwrap();
+            for monitor in monitors.iter() {
+                if let Some(workspace) = monitor.get_workspace(active_workspace_num) {
+                    if let Some(hwnd) = workspace.focused_window_hwnd {
+                        next_focus = Some(HWND(hwnd as _));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(hwnd) = next_focus {
+            println!("DEBUG: Auto-focusing next window {:?} after close", hwnd.0);
+            self.set_window_focus(hwnd);
+        }
 
         println!("Window closed and workspace re-tiled");
         Ok(())

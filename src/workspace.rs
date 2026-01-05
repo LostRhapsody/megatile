@@ -38,25 +38,42 @@ impl Window {
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub windows: Vec<Window>,
+    pub focused_window_hwnd: Option<isize>,
 }
 
 impl Workspace {
     pub fn new() -> Self {
         Workspace {
             windows: Vec::new(),
+            focused_window_hwnd: None,
         }
     }
 
     pub fn add_window(&mut self, window: Window) {
+        if self.focused_window_hwnd.is_none() && window.is_tiled {
+            self.focused_window_hwnd = Some(window.hwnd);
+        }
         self.windows.push(window);
     }
 
     pub fn remove_window(&mut self, hwnd: HWND) -> Option<Window> {
-        let pos = self
-            .windows
-            .iter()
-            .position(|w| w.hwnd == hwnd.0 as isize)?;
-        Some(self.windows.remove(pos))
+        let hwnd_val = hwnd.0 as isize;
+        let pos = self.windows.iter().position(|w| w.hwnd == hwnd_val)?;
+
+        if self.focused_window_hwnd == Some(hwnd_val) {
+            self.focused_window_hwnd = None;
+        }
+
+        let removed = self.windows.remove(pos);
+
+        // If we removed the focused window, try to focus another one
+        if self.focused_window_hwnd.is_none() {
+            if let Some(first_tiled) = self.windows.iter().find(|w| w.is_tiled) {
+                self.focused_window_hwnd = Some(first_tiled.hwnd);
+            }
+        }
+
+        Some(removed)
     }
 
     pub fn get_window(&self, hwnd: HWND) -> Option<&Window> {
@@ -72,8 +89,13 @@ impl Workspace {
     }
 
     pub fn set_focus(&mut self, hwnd: HWND, focused: bool) {
+        let hwnd_val = hwnd.0 as isize;
+        println!("hwnd_val: {}", hwnd_val);
         if let Some(window) = self.get_window_mut(hwnd) {
             window.is_focused = focused;
+            if focused {
+                self.focused_window_hwnd = Some(hwnd_val);
+            }
         }
     }
 
