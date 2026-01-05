@@ -600,8 +600,8 @@ unsafe fn draw_workspace_dots_gdiplus(
 
                     // Create a rect for the text centered in the dot
                     let text_rect = windows::Win32::Graphics::GdiPlus::RectF {
-                        X: x as f32,
-                        Y: center_y as f32,
+                        X: 1.0 + (x as f32),
+                        Y: 1.0 + (center_y as f32),
                         Width: DOT_DIAMETER as f32,
                         Height: DOT_DIAMETER as f32,
                     };
