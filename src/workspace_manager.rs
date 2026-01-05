@@ -42,7 +42,7 @@ pub struct WorkspaceManager {
     last_focused_hwnd: Option<isize>,
     last_window_alpha: HashMap<isize, u8>,
     positioning_windows: HashSet<isize>, // Windows currently being positioned by us
-    last_update_positions: Instant, // Debounce update_window_positions calls
+    last_update_positions: Instant,      // Debounce update_window_positions calls
 }
 
 impl WorkspaceManager {
@@ -697,7 +697,7 @@ impl WorkspaceManager {
 
                 // Apply the new positions immediately
                 println!("DEBUG: Applying new positions to remaining windows in source workspace");
-                
+
                 // Collect windows to position to avoid borrow checker issues
                 let mut windows_to_position: Vec<(isize, RECT)> = Vec::new();
                 for monitor in self.monitors.iter() {
@@ -712,7 +712,7 @@ impl WorkspaceManager {
                         }
                     }
                 }
-                
+
                 // Now position them
                 for (hwnd, rect) in windows_to_position {
                     self.set_window_position(hwnd_from_isize(hwnd), &rect);
@@ -764,7 +764,7 @@ impl WorkspaceManager {
     pub fn apply_window_positions(&mut self) {
         // Collect windows to position first to avoid borrow checker issues
         let mut windows_to_position: Vec<(isize, RECT)> = Vec::new();
-        
+
         for monitor in self.monitors.iter() {
             let active_workspace = monitor.get_active_workspace();
 
@@ -774,7 +774,7 @@ impl WorkspaceManager {
                 }
             }
         }
-        
+
         // Update all window rects FIRST to match target positions
         // This prevents update_window_positions from thinking they moved
         for (hwnd_val, target_rect) in &windows_to_position {
@@ -787,12 +787,12 @@ impl WorkspaceManager {
                 }
             }
         }
-        
+
         // Now position them
         for (hwnd, rect) in windows_to_position {
             self.set_window_position(hwnd_from_isize(hwnd), &rect);
         }
-        
+
         // Clear positioning set after a brief moment to allow events to settle
         // We do this immediately since we've already updated window.rect to match
         self.positioning_windows.clear();
@@ -849,10 +849,10 @@ impl WorkspaceManager {
     /// Sets a window's position and size, accounting for DWM invisible borders.
     fn set_window_position(&mut self, hwnd: HWND, rect: &RECT) {
         let hwnd_val = hwnd.0 as isize;
-        
+
         // Mark this window as being positioned by us
         self.positioning_windows.insert(hwnd_val);
-        
+
         unsafe {
             // Restore the window if it's maximized, as SetWindowPos doesn't work on maximized windows
             if IsZoomed(hwnd).as_bool() {
@@ -873,7 +873,7 @@ impl WorkspaceManager {
             )
             .ok();
         }
-        
+
         // Remove from positioning set after a brief delay to catch follow-up events
         // We'll clean this up in the next update cycle
     }
@@ -1249,14 +1249,14 @@ impl WorkspaceManager {
     /// Handles a window being minimized.
     pub fn handle_window_minimized(&mut self, hwnd: HWND) {
         println!("DEBUG: Handling minimized window {:?}", hwnd.0);
-        
+
         // Remove the window from tiling
         if let Some(removed) = self.remove_window(hwnd) {
             println!(
                 "DEBUG: Removed minimized window {:?} from workspace {}",
                 removed.hwnd, removed.workspace
             );
-            
+
             // Re-tile if it was in the active workspace
             if removed.workspace == self.active_workspace_global {
                 self.tile_active_workspaces();
@@ -1266,14 +1266,69 @@ impl WorkspaceManager {
                 println!("DEBUG: Re-tiled after window minimize");
             }
         } else {
-            println!("DEBUG: Minimized window {:?} was not in our tracking", hwnd.0);
+            println!(
+                "DEBUG: Minimized window {:?} was not in our tracking",
+                hwnd.0
+            );
         }
+    }
+
+    /// Handles a window being restored from minimized state.
+    pub fn handle_window_restored(&mut self, hwnd: HWND) {
+        println!("DEBUG: Handling restored window {:?}", hwnd.0);
+
+        // Check if it's a normal window
+        if !crate::windows_lib::is_normal_window_hwnd(hwnd) {
+            println!(
+                "DEBUG: Window {:?} is not a normal window, ignoring",
+                hwnd.0
+            );
+            return;
+        }
+
+        // Check if window is already tracked
+        if self.get_window(hwnd).is_some() {
+            println!("DEBUG: Window {:?} is already tracked, ignoring", hwnd.0);
+            return;
+        }
+
+        // Check if window is still minimized (shouldn't be, but verify)
+        if crate::windows_lib::is_window_minimized(hwnd) {
+            println!("DEBUG: Window {:?} is still minimized, ignoring", hwnd.0);
+            return;
+        }
+
+        println!("DEBUG: Re-registering restored window {:?}", hwnd.0);
+
+        // Get current window rect
+        let rect = crate::windows_lib::get_window_rect(hwnd).unwrap_or_default();
+
+        // Get active workspace and monitor
+        let active_workspace = self.active_workspace_global;
+        let monitor_index = self.get_monitor_for_window(hwnd).unwrap_or(0);
+
+        // Create new window object
+        let window =
+            super::workspace::Window::new(hwnd.0 as isize, active_workspace, monitor_index, rect);
+
+        // Show in taskbar
+        let _ = show_window_in_taskbar(hwnd);
+
+        // Add window and re-tile
+        self.add_window(window);
+        self.tile_active_workspaces();
+        self.apply_window_positions();
+
+        println!(
+            "DEBUG: Successfully re-registered and tiled restored window {:?}",
+            hwnd.0
+        );
     }
 
     /// Removes minimized windows that may have been missed by events.
     pub fn cleanup_minimized_windows(&mut self) {
         let mut minimized_windows = Vec::new();
-        
+
         // Find all minimized windows
         for monitor in self.monitors.iter() {
             for workspace in &monitor.workspaces {
@@ -1285,7 +1340,7 @@ impl WorkspaceManager {
                 }
             }
         }
-        
+
         // Remove them
         for hwnd in minimized_windows {
             println!("DEBUG: Cleanup found minimized window {:?}", hwnd.0);
@@ -1300,12 +1355,12 @@ impl WorkspaceManager {
             return;
         }
         self.last_update_positions = Instant::now();
-        
+
         // Get monitor rects first
         let monitor_rects: Vec<RECT> = self.monitors.iter().map(|m| m.rect).collect();
         let mut moves: Vec<(isize, usize, usize)> = Vec::new(); // (hwnd, old_monitor_idx, new_monitor_idx)
         let mut any_tiled_moved = false;
-        
+
         // Movement threshold: only consider it moved if changed by more than this
         // Set higher to account for DWM border adjustments
         const MOVE_THRESHOLD: i32 = 50;
@@ -1317,9 +1372,9 @@ impl WorkspaceManager {
                     let hwnd = HWND(
                         self.monitors[monitor_idx].workspaces[ws_idx].windows[win_idx].hwnd as _,
                     );
-                    
+
                     let hwnd_val = hwnd.0 as isize;
-                    
+
                     // Skip windows we're currently positioning
                     if self.positioning_windows.contains(&hwnd_val) {
                         continue;
@@ -1334,7 +1389,7 @@ impl WorkspaceManager {
                         let top_diff = (window.rect.top - current_rect.top).abs();
                         let right_diff = (window.rect.right - current_rect.right).abs();
                         let bottom_diff = (window.rect.bottom - current_rect.bottom).abs();
-                        
+
                         let moved_significantly = left_diff > MOVE_THRESHOLD
                             || top_diff > MOVE_THRESHOLD
                             || right_diff > MOVE_THRESHOLD
@@ -1345,7 +1400,7 @@ impl WorkspaceManager {
                                 "DEBUG: Window {:?} moved significantly: left={}, top={}, right={}, bottom={}",
                                 hwnd_val, left_diff, top_diff, right_diff, bottom_diff
                             );
-                            
+
                             // Update original_rect whenever the window moves from its last known position
                             // This captures the user's "preferred" position
                             if !window.is_fullscreen {
@@ -1358,7 +1413,10 @@ impl WorkspaceManager {
                             } else {
                                 // Tiled window moved, will need to re-tile
                                 any_tiled_moved = true;
-                                println!("DEBUG: Tiled window {:?} moved by user, will re-tile", hwnd_val);
+                                println!(
+                                    "DEBUG: Tiled window {:?} moved by user, will re-tile",
+                                    hwnd_val
+                                );
                             }
                         }
 

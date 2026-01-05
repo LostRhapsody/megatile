@@ -71,6 +71,7 @@ enum WindowEvent {
     WindowCreated(isize),
     WindowDestroyed(isize),
     WindowMinimized(isize),
+    WindowRestored(isize),
     WindowMoved(isize),
     FocusChanged(isize),
     DisplayChange,
@@ -119,6 +120,9 @@ unsafe extern "system" fn win_event_proc(
         }
         EVENT_SYSTEM_MINIMIZESTART => {
             push_event(WindowEvent::WindowMinimized(hwnd.0 as isize));
+        }
+        EVENT_SYSTEM_MINIMIZEEND => {
+            push_event(WindowEvent::WindowRestored(hwnd.0 as isize));
         }
         EVENT_OBJECT_LOCATIONCHANGE => {
             push_event(WindowEvent::WindowMoved(hwnd.0 as isize));
@@ -511,6 +515,11 @@ fn main() {
                         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
                         println!("Event: Window Minimized {:?}", hwnd);
                         wm.handle_window_minimized(hwnd);
+                    }
+                    WindowEvent::WindowRestored(hwnd_val) => {
+                        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                        println!("Event: Window Restored {:?}", hwnd);
+                        wm.handle_window_restored(hwnd);
                     }
                     WindowEvent::WindowMoved(hwnd_val) => {
                         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
