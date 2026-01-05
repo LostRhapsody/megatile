@@ -1,45 +1,86 @@
-use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::Graphics::Gdi::*;
+use std::sync::OnceLock;
+use windows::Win32::Foundation::{BOOL, COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, Ellipse, EndPaint,
+    GetClientRect, HBRUSH, HDC, HPEN, PAINTSTRUCT, PS_SOLID, RoundRect, SelectObject,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
+    GetWindowLongPtrW, HMENU, HWND_TOPMOST, IDC_ARROW, InvalidateRect, LoadCursorW, RegisterClassW,
+    SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SetWindowLongPtrW, SetWindowPos, SetWindowRgn, ShowWindow,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WNDCLASSW,
+};
+use windows::core::{PCWSTR, w};
+
+use crate::windows_lib::get_accent_color;
+
+pub const STATUSBAR_MAX_WORKSPACES: u8 = 9;
+pub const STATUSBAR_VISIBLE_DOTS: u8 = 5;
+pub const STATUSBAR_HEIGHT: i32 = 16;
+pub const STATUSBAR_WIDTH: i32 = 150;
+pub const STATUSBAR_TOP_GAP: i32 = 2;
+pub const STATUSBAR_BOTTOM_GAP: i32 = 4;
+pub const STATUSBAR_VERTICAL_RESERVE: i32 =
+    STATUSBAR_TOP_GAP + STATUSBAR_HEIGHT + STATUSBAR_BOTTOM_GAP;
+
+const DOT_DIAMETER: i32 = 8;
+const DOT_SPACING: i32 = 24;
+const CORNER_RADIUS: i32 = 12;
+const PADDING: i32 = 10;
+const DEFAULT_ACCENT_COLOR: u32 = 0x007A7A7A;
+const INACTIVE_GREY: u8 = 180;
+
+static STATUSBAR_CLASS: OnceLock<Result<(), String>> = OnceLock::new();
+const STATUSBAR_CLASS_NAME: PCWSTR = w!("MegaTileStatusBar");
+
+#[derive(Debug)]
+struct StatusBarState {
+    active_workspace: u8,
+    total_workspaces: u8,
+    accent_color: u32,
+}
 
 pub struct StatusBar {
     hwnd: HWND,
+    state: Box<StatusBarState>,
 }
 
 impl StatusBar {
     pub fn new(owner_hwnd: HWND) -> Result<Self, String> {
-        unsafe {
-            let hwnd = CreateWindowExW(
+        let hinstance =
+            GetModuleHandleW(None).map_err(|e| format!("Failed to get module handle: {}", e))?;
+        ensure_class(hinstance)?;
+
+        let accent_color = get_accent_color().unwrap_or(DEFAULT_ACCENT_COLOR);
+        let mut state = Box::new(StatusBarState {
+            active_workspace: 1,
+            total_workspaces: STATUSBAR_VISIBLE_DOTS,
+            accent_color,
+        });
+
+        let hwnd = unsafe {
+            CreateWindowExW(
                 WINDOW_EX_STYLE(WS_EX_TOPMOST.0 | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0),
-                w!("STATIC"),
+                STATUSBAR_CLASS_NAME,
                 w!(""),
-                WINDOW_STYLE(WS_POPUP.0 | WS_VISIBLE.0 | 0x1), // 0x1 is SS_CENTER
+                WINDOW_STYLE(WS_POPUP.0 | WS_VISIBLE.0),
                 0,
                 0,
-                0,
-                0,
+                STATUSBAR_WIDTH,
+                STATUSBAR_HEIGHT,
                 Some(owner_hwnd),
                 Some(HMENU::default()),
-                Some(GetModuleHandleW(None).unwrap().into()),
+                Some(hinstance),
                 None,
-            );
+            )
+            .map_err(|e| format!("Failed to create status bar window: {}", e))?
+        };
 
-            let hwnd = match hwnd {
-                Ok(h) => h,
-                Err(e) => return Err(format!("Failed to create status bar window: {}", e)),
-            };
-
-            Ok(StatusBar { hwnd })
-        }
-    }
-
-    pub fn set_text(&self, text: &str) {
-        unsafe {
-            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-            SetWindowTextW(self.hwnd, windows::core::PCWSTR(wide.as_ptr())).ok();
-        }
+        let mut statusbar = StatusBar { hwnd, state };
+        statusbar.sync_state_pointer();
+        statusbar.update_region(STATUSBAR_WIDTH, STATUSBAR_HEIGHT);
+        Ok(statusbar)
     }
 
     pub fn set_position(&self, x: i32, y: i32, width: i32, height: i32) {
@@ -53,17 +94,18 @@ impl StatusBar {
                 height,
                 SWP_NOACTIVATE,
             );
+            self.update_region(width, height);
         }
     }
 
-    pub fn set_font(&self, hfont: HFONT) {
+    pub fn update_indicator(&mut self, active_workspace: u8, total_workspaces: u8) {
+        self.state.active_workspace = active_workspace.clamp(1, STATUSBAR_MAX_WORKSPACES);
+        self.state.total_workspaces = total_workspaces.clamp(1, STATUSBAR_MAX_WORKSPACES);
+        if let Ok(color) = get_accent_color() {
+            self.state.accent_color = color;
+        }
         unsafe {
-            let _ = SendMessageW(
-                self.hwnd,
-                WM_SETFONT,
-                Some(WPARAM(hfont.0 as usize)),
-                Some(LPARAM(1)),
-            );
+            InvalidateRect(self.hwnd, None, BOOL(0));
         }
     }
 
@@ -79,20 +121,218 @@ impl StatusBar {
         }
     }
 
-    pub fn update_full_status(
-        &self,
-        workspace_num: u8,
-        window_count: usize,
-        tiling_algorithm: &str,
-    ) {
-        let text = format!(
-            " Workspace {} | {} Windows | {} ",
-            workspace_num, window_count, tiling_algorithm
-        );
-        self.set_text(&text);
-    }
-
     pub fn get_hwnd(&self) -> HWND {
         self.hwnd
+    }
+
+    fn sync_state_pointer(&mut self) {
+        let ptr = self.state.as_mut() as *mut StatusBarState as isize;
+        unsafe {
+            SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, ptr);
+        }
+    }
+
+    fn update_region(&self, width: i32, height: i32) {
+        unsafe {
+            let region = CreateRoundRectRgn(0, 0, width, height, CORNER_RADIUS, CORNER_RADIUS);
+            let _ = SetWindowRgn(self.hwnd, region, BOOL(1));
+        }
+    }
+}
+
+impl Drop for StatusBar {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = DestroyWindow(self.hwnd);
+        }
+    }
+}
+
+fn ensure_class(hinstance: HINSTANCE) -> Result<(), String> {
+    STATUSBAR_CLASS
+        .get_or_init(|| unsafe {
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(statusbar_wnd_proc),
+                hInstance: hinstance,
+                lpszClassName: STATUSBAR_CLASS_NAME,
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                style: CS_HREDRAW | CS_VREDRAW,
+                ..Default::default()
+            };
+
+            if RegisterClassW(&wc) == 0 {
+                Err("Failed to register status bar window class".to_string())
+            } else {
+                Ok(())
+            }
+        })
+        .clone()
+}
+
+extern "system" fn statusbar_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_PAINT => {
+                paint_statusbar(hwnd);
+                return LRESULT(0);
+            }
+            WM_ERASEBKGND => return LRESULT(1),
+            WM_NCDESTROY => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            _ => {}
+        }
+
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+}
+
+unsafe fn paint_statusbar(hwnd: HWND) {
+    let state_ptr = get_state_ptr(hwnd);
+    if state_ptr.is_null() {
+        return;
+    }
+
+    let state = &*state_ptr;
+
+    let mut ps = PAINTSTRUCT::default();
+    let hdc = BeginPaint(hwnd, &mut ps);
+    if hdc.0 == 0 {
+        return;
+    }
+
+    let mut rect = RECT::default();
+    GetClientRect(hwnd, &mut rect);
+
+    draw_background(hdc, &rect, state.accent_color);
+    draw_workspace_dots(hdc, &rect, state);
+
+    EndPaint(hwnd, &mut ps);
+}
+
+unsafe fn draw_background(hdc: HDC, rect: &RECT, accent_color: u32) {
+    let bg_color = subtle_background(accent_color);
+    let brush = CreateSolidBrush(COLORREF(bg_color));
+    let pen = CreatePen(PS_SOLID, 1, COLORREF(accent_color));
+
+    let old_pen = SelectObject(hdc, pen);
+    let old_brush = SelectObject(hdc, brush);
+
+    RoundRect(
+        hdc,
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom,
+        CORNER_RADIUS,
+        CORNER_RADIUS,
+    );
+
+    SelectObject(hdc, old_pen);
+    SelectObject(hdc, old_brush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+}
+
+unsafe fn draw_workspace_dots(hdc: HDC, rect: &RECT, state: &StatusBarState) {
+    let total = state.total_workspaces.min(STATUSBAR_MAX_WORKSPACES);
+    let visible = total.min(STATUSBAR_VISIBLE_DOTS);
+    let (start, _) = workspace_window_range(state.active_workspace, total, visible);
+
+    let content_width = DOT_DIAMETER + (visible as i32 - 1) * DOT_SPACING;
+    let available = rect.right - rect.left;
+    let mut start_x = (available - content_width) / 2;
+    if start_x < PADDING {
+        start_x = PADDING;
+    }
+
+    let center_y = rect.top + (rect.bottom - rect.top - DOT_DIAMETER) / 2;
+    let inactive = inactive_dot_color(state.accent_color);
+
+    for i in 0..visible {
+        let workspace_id = start + i;
+        let color = if workspace_id == state.active_workspace {
+            state.accent_color
+        } else {
+            inactive
+        };
+
+        let x = start_x + (i as i32) * DOT_SPACING;
+
+        let brush: HBRUSH = CreateSolidBrush(COLORREF(color));
+        let pen: HPEN = CreatePen(PS_SOLID, 1, COLORREF(color));
+        let old_pen = SelectObject(hdc, pen);
+        let old_brush = SelectObject(hdc, brush);
+
+        Ellipse(hdc, x, center_y, x + DOT_DIAMETER, center_y + DOT_DIAMETER);
+
+        SelectObject(hdc, old_pen);
+        SelectObject(hdc, old_brush);
+        DeleteObject(pen);
+        DeleteObject(brush);
+    }
+}
+
+fn workspace_window_range(active: u8, total: u8, visible: u8) -> (u8, u8) {
+    let total = total as i32;
+    let visible = visible as i32;
+    let active = active as i32;
+
+    let start = if total <= visible || active <= 3 {
+        1
+    } else if active > total - 2 {
+        total - visible + 1
+    } else {
+        active - 2
+    };
+
+    let start = start.max(1) as u8;
+    (start, start + visible as u8 - 1)
+}
+
+fn subtle_background(accent_color: u32) -> u32 {
+    let (r, g, b) = split_color(accent_color);
+    compose_color(
+        blend_channel(r, 230, 0.35),
+        blend_channel(g, 230, 0.35),
+        blend_channel(b, 230, 0.35),
+    )
+}
+
+fn inactive_dot_color(accent_color: u32) -> u32 {
+    let (r, g, b) = split_color(accent_color);
+    compose_color(
+        blend_channel(r, INACTIVE_GREY, 0.25),
+        blend_channel(g, INACTIVE_GREY, 0.25),
+        blend_channel(b, INACTIVE_GREY, 0.25),
+    )
+}
+
+fn blend_channel(active: u8, target: u8, ratio: f32) -> u8 {
+    ((active as f32 * ratio) + (target as f32 * (1.0 - ratio))).round() as u8
+}
+
+fn split_color(color: u32) -> (u8, u8, u8) {
+    let r = (color & 0xFF) as u8;
+    let g = ((color >> 8) & 0xFF) as u8;
+    let b = ((color >> 16) & 0xFF) as u8;
+    (r, g, b)
+}
+
+fn compose_color(r: u8, g: u8, b: u8) -> u32 {
+    (b as u32) << 16 | (g as u32) << 8 | r as u32
+}
+
+unsafe fn get_state_ptr(hwnd: HWND) -> *mut StatusBarState {
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if ptr == 0 {
+        std::ptr::null_mut()
+    } else {
+        ptr as *mut StatusBarState
     }
 }

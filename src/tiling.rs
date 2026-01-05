@@ -1,3 +1,4 @@
+use crate::statusbar::STATUSBAR_VERTICAL_RESERVE;
 use crate::workspace::{Monitor, Window};
 use windows::Win32::Foundation::RECT;
 
@@ -113,9 +114,12 @@ impl DwindleTiler {
         let mut rect = monitor.rect;
         // Add gap padding
         rect.left += self.gap;
-        rect.top += self.gap;
+        rect.top += self.gap + STATUSBAR_VERTICAL_RESERVE;
         rect.right -= self.gap;
         rect.bottom -= self.gap;
+        if rect.top > rect.bottom {
+            rect.top = rect.bottom;
+        }
         rect
     }
 

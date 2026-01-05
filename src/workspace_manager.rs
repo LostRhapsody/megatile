@@ -1,10 +1,11 @@
 use super::workspace::{Monitor, Window};
-use crate::statusbar::StatusBar;
+use crate::statusbar::{STATUSBAR_MAX_WORKSPACES, StatusBar};
 use crate::tiling::DwindleTiler;
 use crate::windows_lib::{
     get_accent_color, hide_window_from_taskbar, reset_window_decorations, set_window_border_color,
     set_window_transparency, show_window_in_taskbar,
 };
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -17,7 +18,9 @@ pub struct WorkspaceManager {
     active_workspace_global: u8, // All monitors share the same active workspace
     last_reenumerate: Instant,
     statusbar: Option<StatusBar>,
+    statusbar_visible: bool,
     last_focused_hwnd: Option<isize>,
+    last_window_alpha: HashMap<isize, u8>,
 }
 
 impl WorkspaceManager {
@@ -27,7 +30,9 @@ impl WorkspaceManager {
             active_workspace_global: 1,
             last_reenumerate: Instant::now() - Duration::from_secs(60),
             statusbar: None,
+            statusbar_visible: true,
             last_focused_hwnd: None,
+            last_window_alpha: HashMap::new(),
         }
     }
 
@@ -35,17 +40,16 @@ impl WorkspaceManager {
         self.statusbar = Some(statusbar);
     }
 
-    pub fn update_statusbar(&self) {
-        if let Some(statusbar) = &self.statusbar {
+    pub fn update_statusbar(&mut self) {
+        if let Some(statusbar) = self.statusbar.as_mut() {
             let workspace_num = self.active_workspace_global;
-            let window_count = self.get_active_workspace_window_count();
-            // In a future step, we can dynamically get the algorithm name
-            statusbar.update_full_status(workspace_num, window_count, "Dwindle");
+            statusbar.update_indicator(workspace_num, STATUSBAR_MAX_WORKSPACES);
         }
     }
 
     pub fn toggle_statusbar(&mut self, visible: bool) {
-        if let Some(statusbar) = &self.statusbar {
+        self.statusbar_visible = visible;
+        if let Some(statusbar) = self.statusbar.as_mut() {
             if visible {
                 statusbar.show();
                 self.update_statusbar();
@@ -53,6 +57,11 @@ impl WorkspaceManager {
                 statusbar.hide();
             }
         }
+    }
+
+    pub fn invert_statusbar_visibility(&mut self) {
+        let desired = !self.statusbar_visible;
+        self.toggle_statusbar(desired);
     }
 
     pub fn get_active_workspace_window_count(&self) -> usize {
@@ -69,21 +78,48 @@ impl WorkspaceManager {
         // If focus hasn't changed, we can still update if needed, but usually once is enough
         self.last_focused_hwnd = Some(focused_hwnd.0 as isize);
 
-        let accent_color = get_accent_color();
-        let managed_hwnds = self.get_all_managed_hwnds();
+        let accent_color = match get_accent_color() {
+            Ok(color) => color,
+            Err(e) => {
+                eprintln!("Failed to read accent color: {}", e);
+                return;
+            }
+        };
 
-        for hwnd_val in managed_hwnds {
-            let hwnd = HWND(hwnd_val as _);
-            if hwnd == focused_hwnd {
-                // Focused window: Accent border, opaque
-                set_window_border_color(hwnd, accent_color);
-                set_window_transparency(hwnd, 255);
+        let managed_hwnds = self.get_all_managed_hwnds();
+        let managed_set: HashSet<isize> = managed_hwnds.iter().copied().collect();
+        let unfocused_alpha: u8 = 245;
+
+        for hwnd_val in &managed_hwnds {
+            let hwnd = HWND(*hwnd_val as _);
+            let desired_alpha = if hwnd == focused_hwnd {
+                255
             } else {
-                // Non-focused window: No custom border, subtle transparency
-                reset_window_decorations(hwnd);
-                set_window_transparency(hwnd, 230); // ~90% opaque
+                unfocused_alpha
+            };
+            let previous_alpha = self.last_window_alpha.get(hwnd_val).copied();
+
+            if hwnd == focused_hwnd {
+                if let Err(e) = set_window_border_color(hwnd, accent_color) {
+                    eprintln!("Failed to set window border color: {}", e);
+                }
+            } else if previous_alpha != Some(desired_alpha) {
+                if let Err(e) = reset_window_decorations(hwnd) {
+                    eprintln!("Failed to reset window decorations: {}", e);
+                }
+            }
+
+            if previous_alpha != Some(desired_alpha) {
+                if let Err(e) = set_window_transparency(hwnd, desired_alpha) {
+                    eprintln!("Failed to set window transparency: {}", e);
+                } else {
+                    self.last_window_alpha.insert(*hwnd_val, desired_alpha);
+                }
             }
         }
+
+        self.last_window_alpha
+            .retain(|hwnd, _| managed_set.contains(hwnd));
     }
 
     pub fn set_monitors(&mut self, monitors: Vec<Monitor>) {
@@ -164,6 +200,7 @@ impl WorkspaceManager {
 
     pub fn remove_window(&mut self, hwnd: HWND) -> Option<Window> {
         println!("DEBUG: Removing window {:?}", hwnd.0);
+        self.last_window_alpha.remove(&(hwnd.0 as isize));
         for (monitor_idx, monitor) in self.monitors.iter_mut().enumerate() {
             println!(
                 "DEBUG: Checking monitor {} for window {:?}",

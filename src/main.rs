@@ -4,27 +4,28 @@
 )]
 
 mod hotkeys;
+mod statusbar;
 mod tiling;
 mod tray;
 mod windows_lib;
 mod workspace;
 mod workspace_manager;
-mod statusbar;
 
-use hotkeys::HotkeyManager;
-use statusbar::StatusBar;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tray::TrayManager;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Gdi::{CreateFontW, FW_NORMAL, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, FF_DONTCARE, HFONT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
-use windows_lib::{enumerate_monitors, get_normal_windows, show_window_in_taskbar, reset_window_decorations};
+
+use hotkeys::HotkeyManager;
+use statusbar::{STATUSBAR_HEIGHT, STATUSBAR_TOP_GAP, STATUSBAR_WIDTH, StatusBar};
+use tray::TrayManager;
+use windows_lib::{
+    enumerate_monitors, get_normal_windows, reset_window_decorations, show_window_in_taskbar,
+};
 use workspace_manager::WorkspaceManager;
 
 static CLASS_NAME: [u16; 22] = [
@@ -109,7 +110,12 @@ fn cleanup_on_exit(wm: &mut WorkspaceManager) {
                 eprintln!("  ✗ Failed to restore window {:?}: {}", hwnd, e);
             }
         }
-        reset_window_decorations(hwnd_handle);
+        if let Err(e) = reset_window_decorations(hwnd_handle) {
+            eprintln!(
+                "  ✗ Failed to reset window decorations for {:?}: {}",
+                hwnd, e
+            );
+        }
     }
 
     println!(
@@ -235,35 +241,8 @@ fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
             Err(e) => eprintln!("Failed to close window: {}", e),
         },
         hotkeys::HotkeyAction::ToggleStatusBar => {
-            // This is handled in the main loop to manage visibility state
+            wm.invert_statusbar_visibility();
         }
-    }
-}
-
-fn create_statusbar_font() -> Result<HFONT, String> {
-    unsafe {
-        let font = CreateFontW(
-            20,
-            0,
-            0,
-            0,
-            FW_NORMAL.0 as i32,
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET,
-            OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY,
-            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-            w!("Segoe UI"),
-        );
-
-        if font.is_invalid() {
-            return Err("Failed to create font".to_string());
-        }
-
-        Ok(font)
     }
 }
 
@@ -356,22 +335,19 @@ fn main() {
 
     // Initialize status bar
     let statusbar = StatusBar::new(hwnd).expect("Failed to create status bar");
-    let statusbar_font = create_statusbar_font().expect("Failed to create status bar font");
-    statusbar.set_font(statusbar_font);
 
     // Set status bar position and size (top center of primary monitor)
     let monitor_infos = windows_lib::enumerate_monitors();
     if let Some(primary_monitor) = monitor_infos.iter().find(|m| m.is_primary) {
         let rect = primary_monitor.rect;
-        let statusbar_width = 400;
-        let statusbar_height = 30;
+        let statusbar_width = STATUSBAR_WIDTH;
+        let statusbar_height = STATUSBAR_HEIGHT;
         let x = rect.left + (rect.right - rect.left - statusbar_width) / 2;
-        let y = rect.top + 5; // Slight offset from top
+        let y = rect.top + STATUSBAR_TOP_GAP;
 
         statusbar.set_position(x, y, statusbar_width, statusbar_height);
     }
 
-    let statusbar_visible = Arc::new(AtomicBool::new(true));
     wm.set_statusbar(statusbar);
     wm.update_statusbar();
     wm.update_decorations();
@@ -428,16 +404,7 @@ fn main() {
             if let Some(event) = event {
                 match event {
                     WindowEvent::Hotkey(action) => {
-                        if let hotkeys::HotkeyAction::ToggleStatusBar = action {
-                            let wm_lock = &mut wm;
-                            let current = statusbar_visible.load(Ordering::SeqCst);
-                            let new_val = !current;
-                            statusbar_visible.store(new_val, Ordering::SeqCst);
-                            
-                            wm_lock.toggle_statusbar(new_val);
-                        } else {
-                            handle_action(action, &mut wm);
-                        }
+                        handle_action(action, &mut wm);
                     }
                     WindowEvent::WindowCreated(hwnd_val) => {
                         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);

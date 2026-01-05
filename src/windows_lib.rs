@@ -1,11 +1,14 @@
-use windows::core::BOOL;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, TRUE, WPARAM};
+use std::ptr;
+use windows::Win32::Foundation::{
+    COLORREF, GetLastError, HWND, LPARAM, RECT, SetLastError, TRUE, WIN32_ERROR, WPARAM,
+};
 use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST,
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+    MonitorFromWindow,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::BOOL;
 
 const MONITORINFOF_PRIMARY: u32 = 1;
 const DWMWA_BORDER_COLOR: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(34);
@@ -338,49 +341,75 @@ pub fn get_monitor_rect(hwnd: HWND) -> Option<RECT> {
     }
 }
 
-pub fn get_accent_color() -> u32 {
+/// Gets the Windows accent color and converts it to COLORREF format (0x00BBGGRR).
+pub fn get_accent_color() -> Result<u32, String> {
     let mut color = 0u32;
-    let mut opaque = BOOL(0);
     unsafe {
-        let _ = DwmGetColorizationColor(&mut color, &mut opaque);
+        DwmGetColorizationColor(&mut color, ptr::null_mut())
+            .map_err(|e| format!("Failed to get accent color: {}", e))?;
     }
     // color is 0xAARRGGBB. Convert to 0x00BBGGRR (COLORREF format)
     let r = (color >> 16) & 0xFF;
     let g = (color >> 8) & 0xFF;
     let b = color & 0xFF;
-    (b << 16) | (g << 8) | r
+    Ok((b << 16) | (g << 8) | r)
 }
 
-pub fn set_window_border_color(hwnd: HWND, color: u32) {
+/// Sets the window border color.
+///
+/// # Arguments
+/// * `color` - Color in COLORREF format (0x00BBGGRR)
+pub fn set_window_border_color(hwnd: HWND, color: u32) -> Result<(), String> {
     unsafe {
-        let _ = DwmSetWindowAttribute(
+        DwmSetWindowAttribute(
             hwnd,
             DWMWA_BORDER_COLOR,
             &color as *const _ as *const std::ffi::c_void,
-            4,
-        );
+            std::mem::size_of::<u32>() as u32,
+        )
+        .map_err(|e| format!("Failed to set window border color: {}", e))?;
     }
+    Ok(())
 }
 
-pub fn set_window_transparency(hwnd: HWND, alpha: u8) {
+/// Sets the window transparency level.
+///
+/// # Arguments
+/// * `alpha` - Transparency level (0 = fully transparent, 255 = fully opaque)
+pub fn set_window_transparency(hwnd: HWND, alpha: u8) -> Result<(), String> {
     unsafe {
+        SetLastError(WIN32_ERROR(0));
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
         if alpha == 255 {
-            let _ = SetWindowLongW(
+            let result = SetWindowLongW(
                 hwnd,
                 GWL_EXSTYLE,
                 (ex_style as u32 & !WS_EX_LAYERED.0) as i32,
             );
+            if result == 0 && GetLastError() != WIN32_ERROR(0) {
+                return Err(format!(
+                    "Failed to clear layered style: {}",
+                    windows::core::Error::from_win32()
+                ));
+            }
         } else {
-            let _ = SetWindowLongW(
+            let result = SetWindowLongW(
                 hwnd,
                 GWL_EXSTYLE,
                 (ex_style as u32 | WS_EX_LAYERED.0) as i32,
             );
-            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
+            if result == 0 && GetLastError() != WIN32_ERROR(0) {
+                return Err(format!(
+                    "Failed to set layered style: {}",
+                    windows::core::Error::from_win32()
+                ));
+            }
+            // COLORREF(0) is unused when LWA_ALPHA flag is set
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA)
+                .map_err(|e| format!("Failed to set layered window attributes: {}", e))?;
         }
         // Force frame update
-        let _ = SetWindowPos(
+        SetWindowPos(
             hwnd,
             None,
             0,
@@ -388,11 +417,14 @@ pub fn set_window_transparency(hwnd: HWND, alpha: u8) {
             0,
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
-        );
+        )
+        .map_err(|e| format!("Failed to update window frame: {}", e))?;
     }
+    Ok(())
 }
 
-pub fn reset_window_decorations(hwnd: HWND) {
-    set_window_border_color(hwnd, DWMWA_COLOR_DEFAULT);
-    set_window_transparency(hwnd, 255);
+pub fn reset_window_decorations(hwnd: HWND) -> Result<(), String> {
+    set_window_border_color(hwnd, DWMWA_COLOR_DEFAULT)?;
+    set_window_transparency(hwnd, 255)?;
+    Ok(())
 }
