@@ -342,6 +342,20 @@ impl WorkspaceManager {
         None
     }
 
+    /// Checks if a window is in any active workspace across all monitors.
+    ///
+    /// Used to determine if a hidden window is expected (inactive workspace) or a zombie (hidden in active workspace).
+    pub fn is_window_in_active_workspace(&self, hwnd: HWND) -> bool {
+        let hwnd_val = hwnd.0 as isize;
+        for monitor in self.monitors.iter() {
+            let active_workspace = monitor.get_active_workspace();
+            if active_workspace.windows.iter().any(|w| w.hwnd == hwnd_val) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Re-enumerates monitors and updates workspace assignments.
     ///
     /// Called when monitor configuration changes (hot-plug, resolution change).
@@ -562,7 +576,7 @@ impl WorkspaceManager {
 
     /// Sets visibility for all windows in a workspace (hide=true or show=false).
     fn set_workspace_windows_visibility(
-        &self,
+        &mut self,
         workspace_num: u8,
         hide: bool,
     ) -> Result<(), String> {
@@ -572,15 +586,16 @@ impl WorkspaceManager {
         let mut success_count = 0;
         let mut failed_count = 0;
 
-        for (monitor_idx, monitor) in self.monitors.iter().enumerate() {
-            if let Some(workspace) = monitor.get_workspace(workspace_num) {
+        // MUTABLE iteration: Need to update is_hidden_by_workspace flag after hiding/showing
+        for (monitor_idx, monitor) in self.monitors.iter_mut().enumerate() {
+            if let Some(workspace) = monitor.get_workspace_mut(workspace_num) {
                 debug!(
                     "Monitor {} has {} windows in workspace {}",
                     monitor_idx,
                     workspace.windows.len(),
                     workspace_num
                 );
-                for window in &workspace.windows {
+                for window in &mut workspace.windows {
                     let hwnd = hwnd_from_isize(window.hwnd);
                     let result = if hide {
                         hide_window_from_taskbar(hwnd)
@@ -588,7 +603,12 @@ impl WorkspaceManager {
                         show_window_in_taskbar(hwnd)
                     };
                     match result {
-                        Ok(()) => success_count += 1,
+                        Ok(()) => {
+                            success_count += 1;
+                            // Track workspace hiding state to prevent cleanup from removing these windows
+                            window.is_hidden_by_workspace = hide;
+                            debug!("Window {:?} is_hidden_by_workspace = {}", window.hwnd, hide);
+                        }
                         Err(e) => {
                             error!(
                                 "Failed to {} window {:?}: {}",
@@ -611,12 +631,12 @@ impl WorkspaceManager {
     }
 
     /// Hides all windows in a workspace from the taskbar.
-    fn hide_workspace_windows(&self, workspace_num: u8) -> Result<(), String> {
+    fn hide_workspace_windows(&mut self, workspace_num: u8) -> Result<(), String> {
         self.set_workspace_windows_visibility(workspace_num, true)
     }
 
     /// Shows all windows in a workspace in the taskbar.
-    fn show_workspace_windows(&self, workspace_num: u8) -> Result<(), String> {
+    fn show_workspace_windows(&mut self, workspace_num: u8) -> Result<(), String> {
         self.set_workspace_windows_visibility(workspace_num, false)
     }
 
@@ -1447,9 +1467,17 @@ impl WorkspaceManager {
         let active_workspace = self.active_workspace_global;
         let monitor_index = self.get_monitor_for_window(hwnd).unwrap_or(0);
 
+        // Get process name for app-specific filtering
+        let process_name = crate::windows_lib::get_process_name_for_window(hwnd);
+
         // Create new window object
-        let window =
-            super::workspace::Window::new(hwnd.0 as isize, active_workspace, monitor_index, rect);
+        let window = super::workspace::Window::new(
+            hwnd.0 as isize,
+            active_workspace,
+            monitor_index,
+            rect,
+            process_name,
+        );
 
         // Show in taskbar
         let _ = show_window_in_taskbar(hwnd);
@@ -1465,26 +1493,45 @@ impl WorkspaceManager {
         );
     }
 
-    /// Removes minimized windows that may have been missed by events.
-    pub fn cleanup_minimized_windows(&mut self) {
-        let mut minimized_windows = Vec::new();
+    /// Removes invalid windows that have become hidden, minimized, or destroyed.
+    ///
+    /// This function performs "garbage collection" on windows that apps have hidden
+    /// without properly destroying them (e.g., Zoom login splash screens, Steam popups).
+    /// It checks:
+    /// - Minimized state (missed by events)
+    /// - Window visibility (hidden by app) - UNLESS window is intentionally hidden by workspace switching
+    /// - DWM cloaked state (UWP apps)
+    /// - Invalid geometry (zero-size, off-screen)
+    /// - Invalid window handles
+    pub fn cleanup_invalid_windows(&mut self) {
+        let mut invalid_windows = Vec::new();
 
-        // Find all minimized windows
+        // Find all invalid windows across all monitors and workspaces
         for monitor in self.monitors.iter() {
             for workspace in &monitor.workspaces {
                 for window in &workspace.windows {
                     let hwnd = hwnd_from_isize(window.hwnd);
-                    if crate::windows_lib::is_window_minimized(hwnd) {
-                        minimized_windows.push(hwnd);
+
+                    // Check if window is still valid using comprehensive validation
+                    // Pass is_hidden_by_workspace to skip visibility check for intentionally hidden windows
+                    if !crate::windows_lib::is_window_still_valid(
+                        hwnd,
+                        window.is_hidden_by_workspace,
+                    ) {
+                        debug!(
+                            "Cleanup: found invalid window {:?} (process: {:?}, hidden_by_ws: {})",
+                            hwnd.0, window.process_name, window.is_hidden_by_workspace
+                        );
+                        invalid_windows.push(hwnd);
                     }
                 }
             }
         }
 
-        // Remove them
-        for hwnd in minimized_windows {
-            debug!("Cleanup found minimized window {:?}", hwnd.0);
-            self.handle_window_minimized(hwnd);
+        // Remove all invalid windows and re-tile affected workspaces
+        for hwnd in invalid_windows {
+            debug!("Cleaning up zombie/invalid window {:?}", hwnd.0);
+            self.remove_window_with_tiling(hwnd);
         }
     }
 

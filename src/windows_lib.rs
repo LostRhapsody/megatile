@@ -14,8 +14,12 @@ use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
 };
+use windows::Win32::System::Threading::{
+    OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::BOOL;
+use windows::core::PWSTR;
 
 const MONITORINFOF_PRIMARY: u32 = 1;
 const DWMWA_BORDER_COLOR: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(34);
@@ -87,6 +91,47 @@ pub fn get_window_class(hwnd: HWND) -> String {
     String::from_utf16_lossy(&class_buffer[..class_len as usize])
 }
 
+/// Gets the process name (executable filename) for a window.
+///
+/// Returns `Some("process.exe")` on success, `None` on failure.
+/// This is used for app-specific filtering and rules.
+pub fn get_process_name_for_window(hwnd: HWND) -> Option<String> {
+    unsafe {
+        // Get the process ID for this window
+        let mut process_id: u32 = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+        if process_id == 0 {
+            return None;
+        }
+
+        // Open the process with limited query rights
+        let process_handle =
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id).ok()?;
+
+        // Query the full process image name
+        let mut path_buffer = [0u16; 1024];
+        let mut size = path_buffer.len() as u32;
+
+        if QueryFullProcessImageNameW(
+            process_handle,
+            PROCESS_NAME_FORMAT(0), // Win32 path format
+            PWSTR(path_buffer.as_mut_ptr()),
+            &mut size,
+        )
+        .is_ok()
+        {
+            // Extract just the filename from the full path
+            let full_path = String::from_utf16_lossy(&path_buffer[..size as usize]);
+            std::path::Path::new(&full_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+}
+
 use log::debug;
 
 /// Checks if a window handle represents a normal, manageable window.
@@ -149,6 +194,33 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
         if title.is_empty() {
             debug!("Filtered: empty title");
             return false;
+        }
+
+        // App-specific filtering by process name
+        // These are applications known to create problematic splash/login/hidden windows
+        // that don't get destroyed properly and cause "zombie" window issues
+        if let Some(process_name) = crate::windows_lib::get_process_name_for_window(hwnd) {
+            let process_name_lower = process_name.to_lowercase();
+
+            // Zoom: Known to hide login/splash windows instead of destroying them
+            // This causes phantom windows to remain in the layout after login
+            // Don't filter the main workspace frame though as we want that.
+            if process_name_lower == "zoom.exe" && class_name != "ZPPTMainFrmWndClassEx" {
+                debug!("Filtered: Zoom.exe window (known to create zombie windows)");
+                return false;
+            }
+
+            // Steam: steamwebhelper.exe creates many hidden helper windows
+            if process_name_lower == "steamwebhelper.exe" && title != "Steam" {
+                debug!("Filtered: Steam helper window");
+                return false;
+            }
+
+            // Epic Games Launcher: Creates hidden launcher windows
+            if process_name_lower == "epicgameslauncher.exe" && class_name == "UnrealWindow" {
+                debug!("Filtered: Epic Games Launcher splash");
+                return false;
+            }
         }
 
         // Check for cloaked windows (hidden UWP apps, etc.)
@@ -309,6 +381,101 @@ pub fn is_normal_window(hwnd: HWND, class_name: &str, title: &str) -> bool {
 
         debug!("Filtered: doesn't match any normal window criteria");
         false
+    }
+}
+
+/// Checks if a previously-managed window is still valid for tiling.
+///
+/// This is a lighter-weight check than `is_normal_window()` - it only validates
+/// that a window is still visible, not minimized, not cloaked, and has valid geometry.
+/// Used for garbage-collecting "zombie" windows that have been hidden without being destroyed.
+///
+/// ## Parameters
+/// - `hwnd`: Window handle to validate
+/// - `is_hidden_by_workspace`: If true, skip visibility check (window is intentionally hidden for workspace switching)
+///
+/// Returns `true` if the window is still valid, `false` if it should be removed from management.
+pub fn is_window_still_valid(hwnd: HWND, is_hidden_by_workspace: bool) -> bool {
+    unsafe {
+        // Check if the window handle is still valid
+        if !IsWindow(Some(hwnd)).as_bool() {
+            debug!("Window {:?} is no longer valid (handle invalid)", hwnd.0);
+            return false;
+        }
+
+        // Debug log and skip check all together (besides the IsWindow check above)
+        // Once the window is visible again, we can perform normal checks, but if it's hidden,
+        // don't want to accidentally hide it them remove it FOREVER.
+        if is_hidden_by_workspace {
+            debug!(
+                "Window {:?} is hidden by workspace - skipping validity check",
+                hwnd.0
+            );
+            return true;
+        }
+
+        // Check if the window is still visible
+        // BUT: skip this check if window is intentionally hidden for workspace switching
+        if !IsWindowVisible(hwnd).as_bool() {
+            debug!("Window {:?} is no longer valid (not visible)", hwnd.0);
+            return false;
+        }
+
+        // Check if the window is still visible
+        if !IsWindowVisible(hwnd).as_bool() {
+            debug!("Window {:?} is no longer valid (not visible)", hwnd.0);
+            return false;
+        }
+
+        // Check if the window is minimized
+        if IsIconic(hwnd).as_bool() {
+            debug!("Window {:?} is no longer valid (minimized)", hwnd.0);
+            return false;
+        }
+
+        // Check for cloaked windows (hidden UWP apps, etc.)
+        let mut cloaked = 0u32;
+        let _ = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            &mut cloaked as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+        if cloaked != 0 {
+            debug!("Window {:?} is no longer valid (cloaked)", hwnd.0);
+            return false;
+        }
+
+        // Check window geometry - must have positive size and not be off-screen
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_ok() {
+            let width = rect.right - rect.left;
+            let height = rect.bottom - rect.top;
+
+            // Filter zero-size windows
+            if width <= 0 || height <= 0 {
+                debug!(
+                    "Window {:?} is no longer valid (zero size: {}x{})",
+                    hwnd.0, width, height
+                );
+                return false;
+            }
+
+            // Filter windows positioned far off-screen (likely hidden)
+            if rect.right < -1000 || rect.bottom < -1000 || rect.left > 10000 || rect.top > 10000 {
+                debug!(
+                    "Window {:?} is no longer valid (positioned off-screen: left={}, top={})",
+                    hwnd.0, rect.left, rect.top
+                );
+                return false;
+            }
+        } else {
+            debug!("Window {:?} is no longer valid (couldn't get rect)", hwnd.0);
+            return false;
+        }
+
+        // Window is still valid
+        true
     }
 }
 
