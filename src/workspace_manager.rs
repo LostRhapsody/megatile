@@ -1085,7 +1085,8 @@ impl WorkspaceManager {
                 active_workspace.windows.len()
             );
             for window in &active_workspace.windows {
-                if window.is_tiled {
+                // allow focusing on tiled or fullscreen windows
+                if window.is_tiled || (window.is_fullscreen && !window.is_tiled) {
                     active_windows.push((window.clone(), window.rect));
                     debug!(
                         "Active window: hwnd={:?}, rect={:?}",
