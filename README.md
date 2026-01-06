@@ -8,6 +8,8 @@ Megatile is a minimalist tiling manager that does the bare minimum to be effecti
 
 Megatile will **not** suite everyone. It was designed to suite my needs exactly. There is no config file, to keep Megatile as simple as possible.
 
+The compiled executable is currently 2.6 MB, startup and shutdown time is nearly instant, and actions have no noticable delay. This is the experience I aim to keep for the future of Megatile.
+
 ## Megatile Features and Goals
 
 Megatile aims to be simple, fast, and effective.
