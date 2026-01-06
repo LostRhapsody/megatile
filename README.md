@@ -19,7 +19,7 @@ Megatile aims to be simple, fast, and effective.
 - **Filtering**: Doing our best to filter windows we don't want to tile.
 - **Mutliple Monitors**: Full support for multiple monitors. All monitors share the same workspace.
 - **Dwindle Tiling**: Efficient binary space partitioning. Just the one algorithm.
-- **Status Bar**: Incredibly simply status bar. Shows workspaces 1-5 by default, the active workspace, and the date and time (mm:hh dd/mm). Will also display workspaces 6-9 if there are any windows in them.
+- **Status Bar**: Incredibly simple status bar. Shows workspaces 1-5 by default, the active workspace, and the date and time (mm:hh dd/mm). Will also display workspaces 6-9 if there are any windows in them.
 
 ## Keybindings
 
