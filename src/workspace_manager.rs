@@ -535,6 +535,13 @@ impl WorkspaceManager {
         );
         self.apply_window_positions();
 
+        // Restore fullscreen state for windows that were previously fullscreen
+        debug!(
+            "Restoring fullscreen windows in workspace {}",
+            new_workspace
+        );
+        self.restore_fullscreen_workspace(new_workspace);
+
         // Restore focus for the new workspace
         debug!("Restoring focus for workspace {}", new_workspace);
         let mut focus_target = None;
@@ -1776,17 +1783,49 @@ impl WorkspaceManager {
     }
 
     /// Exits fullscreen for all windows in a workspace.
+    /// Note: This restores windows from fullscreen visually but preserves the is_fullscreen flag
+    /// so that fullscreen state can be restored when switching back to this workspace.
     fn exit_fullscreen_workspace(&mut self, workspace_num: u8) {
         for monitor in self.monitors.iter_mut() {
             if let Some(workspace) = monitor.get_workspace_mut(workspace_num) {
                 for window in &mut workspace.windows {
                     if window.is_fullscreen {
-                        crate::windows_lib::restore_window_from_fullscreen(
+                        debug!(
+                            "Exiting fullscreen for window {:?} in workspace {} (preserving flag)",
+                            window.hwnd, workspace_num
+                        );
+                        if let Err(e) = crate::windows_lib::restore_window_from_fullscreen(
                             hwnd_from_isize(window.hwnd),
                             window.original_rect,
-                        )
-                        .ok();
-                        window.is_fullscreen = false;
+                        ) {
+                            error!("Failed to restore window from fullscreen: {}", e);
+                        }
+                        // Keep is_fullscreen = true so we can restore it when switching back
+                    }
+                }
+            }
+        }
+    }
+
+    /// Restores fullscreen state for windows that were previously fullscreen.
+    /// Called when switching TO a workspace to restore windows marked as fullscreen.
+    fn restore_fullscreen_workspace(&mut self, workspace_num: u8) {
+        for monitor in self.monitors.iter_mut() {
+            let monitor_rect = monitor.rect;
+            if let Some(workspace) = monitor.get_workspace_mut(workspace_num) {
+                for window in &mut workspace.windows {
+                    if window.is_fullscreen {
+                        debug!(
+                            "Restoring fullscreen for window {:?} in workspace {}",
+                            window.hwnd, workspace_num
+                        );
+                        if let Err(e) = crate::windows_lib::set_window_fullscreen(
+                            hwnd_from_isize(window.hwnd),
+                            monitor_rect,
+                        ) {
+                            error!("Failed to set window fullscreen: {}", e);
+                        }
+                        // Flag is already true, no need to set it
                     }
                 }
             }
