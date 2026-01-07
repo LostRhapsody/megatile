@@ -10,7 +10,7 @@ use windows::Win32::Foundation::{HWND, RECT};
 /// Represents a window managed by Megatile.
 ///
 /// Each window tracks its position, workspace assignment, tiling state,
-/// and focus status.
+/// focus status, and process information for app-specific handling.
 #[derive(Debug, Clone)]
 pub struct Window {
     pub hwnd: isize,
@@ -21,11 +21,19 @@ pub struct Window {
     pub is_tiled: bool,
     pub original_rect: RECT, // For restoring from fullscreen/hidden state
     pub is_fullscreen: bool,
+    pub process_name: Option<String>, // Process name (e.g., "Zoom.exe") for app-specific rules
+    pub is_hidden_by_workspace: bool, // True when intentionally hidden due to workspace switching
 }
 
 impl Window {
-    /// Creates a new window with the given handle, workspace, monitor, and initial position.
-    pub fn new(hwnd: isize, workspace: u8, monitor: usize, rect: RECT) -> Self {
+    /// Creates a new window with the given handle, workspace, monitor, initial position, and process name.
+    pub fn new(
+        hwnd: isize,
+        workspace: u8,
+        monitor: usize,
+        rect: RECT,
+        process_name: Option<String>,
+    ) -> Self {
         Window {
             hwnd,
             workspace,
@@ -35,6 +43,8 @@ impl Window {
             is_tiled: true,
             original_rect: rect,
             is_fullscreen: false,
+            process_name,
+            is_hidden_by_workspace: false, // New windows start visible (added to active workspace)
         }
     }
 }

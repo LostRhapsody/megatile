@@ -53,6 +53,7 @@ use statusbar::{
     STATUSBAR_HEIGHT, STATUSBAR_TOP_GAP, STATUSBAR_WIDTH, StatusBar, init_gdiplus, shutdown_gdiplus,
 };
 use tray::TrayManager;
+use windows_lib::get_process_name_for_window;
 use windows_lib::{
     enumerate_monitors, get_normal_windows, reset_window_decorations, show_window_in_taskbar,
 };
@@ -100,6 +101,7 @@ enum WindowEvent {
     WindowMinimized(isize),
     WindowRestored(isize),
     WindowMoved(isize),
+    WindowHidden(isize), // New: fires when WS_VISIBLE is cleared
     FocusChanged(isize),
     DisplayChange,
     TrayExit,
@@ -143,6 +145,11 @@ unsafe extern "system" fn win_event_proc(
         }
         EVENT_OBJECT_DESTROY => {
             push_event(WindowEvent::WindowDestroyed(hwnd.0 as isize));
+        }
+        EVENT_OBJECT_HIDE => {
+            // Fires when a window's WS_VISIBLE style is cleared
+            // This catches apps like Zoom that hide windows instead of destroying them
+            push_event(WindowEvent::WindowHidden(hwnd.0 as isize));
         }
         EVENT_SYSTEM_MINIMIZESTART => {
             push_event(WindowEvent::WindowMinimized(hwnd.0 as isize));
@@ -211,6 +218,8 @@ fn handle_action(action: hotkeys::HotkeyAction, wm: &mut WorkspaceManager) {
             match wm.switch_workspace_with_windows(num) {
                 Ok(()) => {
                     info!("Switched to workspace {}", num);
+                    // Clean up any invalid/zombie windows before tiling
+                    wm.cleanup_invalid_windows();
                     wm.tile_active_workspaces();
                     wm.apply_window_positions();
                 }
@@ -398,11 +407,13 @@ fn main() {
         );
         let is_focused = window_info.hwnd == focused_hwnd;
         let monitor_index = wm.get_monitor_for_window(window_info.hwnd).unwrap_or(0);
+        let process_name = get_process_name_for_window(window_info.hwnd);
         let mut window = workspace::Window::new(
             window_info.hwnd.0 as isize,
             1, // Assign to workspace 1
             monitor_index,
             window_info.rect,
+            process_name,
         );
         window.is_focused = is_focused;
         // Since workspace 1 is active, show in taskbar
@@ -574,11 +585,13 @@ fn main() {
 
                             let active_workspace = wm.get_active_workspace();
                             let monitor_index = wm.get_monitor_for_window(hwnd).unwrap_or(0);
+                            let process_name = get_process_name_for_window(hwnd);
                             let window = workspace::Window::new(
                                 hwnd_val,
                                 active_workspace,
                                 monitor_index,
                                 info.rect,
+                                process_name,
                             );
                             let _ = show_window_in_taskbar(hwnd);
                             wm.add_window(window);
@@ -595,6 +608,28 @@ fn main() {
                         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
                         info!("Event: Window Minimized {:?}", hwnd);
                         wm.handle_window_minimized(hwnd);
+                    }
+                    WindowEvent::WindowHidden(hwnd_val) => {
+                        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+
+                        // Only treat as zombie if window is in active workspace
+                        // Windows in inactive workspaces are supposed to be hidden (workspace switching)
+                        if wm.is_window_in_active_workspace(hwnd) {
+                            info!(
+                                "Event: Window Hidden {:?} in active workspace (zombie)",
+                                hwnd
+                            );
+                            // This is unexpected - window in active workspace shouldn't be hidden
+                            // Likely a zombie window (app hid it without destroying)
+                            wm.remove_window_with_tiling(hwnd);
+                        } else {
+                            debug!(
+                                "Event: Window Hidden {:?} in inactive workspace (expected)",
+                                hwnd
+                            );
+                            // This is expected - workspace switching hides windows
+                            // Don't remove it
+                        }
                     }
                     WindowEvent::WindowRestored(hwnd_val) => {
                         let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);

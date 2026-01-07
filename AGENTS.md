@@ -43,6 +43,7 @@ cargo test  # When tests are available
 - **Performance First**: This is a window manager - speed and low latency are critical.
 - **Safety**: Use `unsafe` blocks only for Windows API calls. All other code should be safe Rust.
 - **Error Handling**: Use `Result<T, String>` for fallible operations. Keep error messages descriptive but concise.
+- **Code over Config**: Try to avoid introducing any sort of 'optional' features that would require new CLI flags or configs. Keep it singlular in focus.
 
 ### Naming Conventions
 - **Functions/Methods**: `snake_case`
