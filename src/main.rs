@@ -511,7 +511,7 @@ fn main() {
             }
             // Periodic maintenance tasks
             wm.update_decorations();
-            wm.cleanup_minimized_windows();
+            wm.cleanup_invalid_windows();
             last_monitor_check = Instant::now();
         }
 
