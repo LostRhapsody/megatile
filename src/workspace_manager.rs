@@ -81,6 +81,35 @@ impl WorkspaceManager {
         }
     }
 
+    /// Updates only the clock on the status bar without changing workspace indicators.
+    pub fn update_statusbar_clock(&mut self) {
+        if let Some(statusbar) = self.statusbar.as_mut() {
+            statusbar.update_clock();
+        }
+    }
+
+    /// Re-centers the status bar on the primary monitor.
+    ///
+    /// Call this after monitor configuration changes to ensure the status bar
+    /// remains centered on the primary display.
+    pub fn recenter_statusbar(&mut self) {
+        use crate::statusbar::{STATUSBAR_HEIGHT, STATUSBAR_TOP_GAP, STATUSBAR_WIDTH};
+
+        if let Some(statusbar) = self.statusbar.as_mut() {
+            let monitor_infos = crate::windows_lib::enumerate_monitors();
+            if let Some(primary_monitor) = monitor_infos.iter().find(|m| m.is_primary) {
+                let rect = primary_monitor.rect;
+                let statusbar_width = STATUSBAR_WIDTH;
+                let statusbar_height = STATUSBAR_HEIGHT;
+                let x = rect.left + (rect.right - rect.left - statusbar_width) / 2;
+                let y = rect.top + STATUSBAR_TOP_GAP;
+
+                statusbar.set_position(x, y, statusbar_width, statusbar_height);
+                debug!("Status bar recentered at ({}, {}) on primary monitor", x, y);
+            }
+        }
+    }
+
     /// Shows or hides the status bar.
     pub fn toggle_statusbar(&mut self, visible: bool) {
         self.statusbar_visible = visible;

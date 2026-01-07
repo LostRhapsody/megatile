@@ -102,7 +102,6 @@ enum WindowEvent {
     WindowMoved(isize),
     FocusChanged(isize),
     DisplayChange,
-    PeriodicCheck,
     TrayExit,
 }
 
@@ -481,22 +480,42 @@ fn main() {
 
     info!("Megatile is running. Use the tray icon to exit.");
 
-    let mut last_periodic_check = Instant::now();
-    let periodic_check_interval = Duration::from_millis(100);
+    let mut last_monitor_check = Instant::now();
+    let monitor_check_interval = Duration::from_millis(100);
+    let mut last_clock_update = Instant::now();
+    let clock_update_interval = Duration::from_secs(1);
 
     // Main event loop
     loop {
+        // 1. Check monitor configuration first (every 100ms)
+        if last_monitor_check.elapsed() >= monitor_check_interval {
+            if wm.check_monitor_changes() {
+                info!("Monitor change detected in main loop");
+                if let Err(e) = wm.reenumerate_monitors() {
+                    error!("Failed to reenumerate monitors: {}", e);
+                } else {
+                    // Recenter status bar on primary monitor after monitor changes
+                    wm.recenter_statusbar();
+                }
+            }
+            // Periodic maintenance tasks
+            wm.update_decorations();
+            wm.cleanup_minimized_windows();
+            last_monitor_check = Instant::now();
+        }
+
+        // 2. Update status bar clock (every second)
+        if last_clock_update.elapsed() >= clock_update_interval {
+            wm.update_statusbar_clock();
+            last_clock_update = Instant::now();
+        }
+
+        // 3. Check for tray exit
         if tray.should_exit() {
             push_event(WindowEvent::TrayExit);
         }
 
-        // Periodic check event
-        if last_periodic_check.elapsed() >= periodic_check_interval {
-            push_event(WindowEvent::PeriodicCheck);
-            last_periodic_check = Instant::now();
-        }
-
-        // Process window messages
+        // 4. Process window messages
         let mut msg = MSG::default();
         while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
             if msg.message == WM_QUIT {
@@ -516,7 +535,7 @@ fn main() {
             }
         }
 
-        // Process all events from the queue per iteration
+        // 5. Process all events from the queue per iteration
         loop {
             let event = if let Some(queue) = EVENT_QUEUE.get() {
                 if let Ok(mut q) = queue.lock() {
@@ -596,18 +615,9 @@ fn main() {
                         info!("Event: Display Change");
                         if let Err(e) = wm.reenumerate_monitors() {
                             error!("Failed to reenumerate monitors: {}", e);
-                        }
-                    }
-                    WindowEvent::PeriodicCheck => {
-                        // Don't call update_window_positions here - it causes feedback loops
-                        // WindowMoved events will handle position updates
-                        wm.update_decorations();
-                        wm.cleanup_minimized_windows();
-                        if wm.check_monitor_changes() {
-                            info!("Monitor change detected by periodic check");
-                            if let Err(e) = wm.reenumerate_monitors() {
-                                error!("Failed to reenumerate monitors: {}", e);
-                            }
+                        } else {
+                            // Recenter status bar on primary monitor after display change
+                            wm.recenter_statusbar();
                         }
                     }
                     WindowEvent::TrayExit => {

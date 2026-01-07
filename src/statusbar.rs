@@ -205,6 +205,14 @@ impl StatusBar {
         self.render();
     }
 
+    /// Updates only the clock display without changing workspace indicators.
+    ///
+    /// This is more efficient than `update_indicator()` when only the time needs refreshing.
+    pub fn update_clock(&mut self) {
+        update_time_string(&mut self.state);
+        self.render();
+    }
+
     /// Shows the status bar.
     pub fn show(&self) {
         unsafe {
