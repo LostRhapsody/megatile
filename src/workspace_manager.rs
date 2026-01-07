@@ -44,6 +44,9 @@ pub struct WorkspaceManager {
     last_window_alpha: HashMap<isize, u8>,
     positioning_windows: HashSet<isize>, // Windows currently being positioned by us
     last_update_positions: Instant,      // Debounce update_window_positions calls
+    monitors_dirty: bool,                // Flag to check monitors on next cycle
+    window_locations: HashMap<isize, (usize, usize, usize)>, // hwnd -> (monitor_idx, workspace_idx, window_idx)
+    process_name_cache: HashMap<isize, Option<String>>,      // hwnd -> process name cache
 }
 
 impl WorkspaceManager {
@@ -59,7 +62,14 @@ impl WorkspaceManager {
             last_window_alpha: HashMap::new(),
             positioning_windows: HashSet::new(),
             last_update_positions: Instant::now() - Duration::from_secs(60),
+            monitors_dirty: false,
+            window_locations: HashMap::new(),
+            process_name_cache: HashMap::new(),
         }
+    }
+    }
+    }
+    }
     }
 
     /// Sets the status bar instance for workspace indicator updates.
@@ -130,10 +140,14 @@ impl WorkspaceManager {
     }
 
     /// Updates window decorations (border color, transparency) based on focus state.
+    /// Only updates windows in active workspaces for performance.
     pub fn update_decorations(&mut self) {
         let focused_hwnd = unsafe { GetForegroundWindow() };
 
-        // If focus hasn't changed, we can still update if needed, but usually once is enough
+        // Skip if focus unchanged
+        if self.last_focused_hwnd == Some(focused_hwnd.0 as isize) {
+            return;
+        }
         self.last_focused_hwnd = Some(focused_hwnd.0 as isize);
 
         let accent_color = match get_accent_color() {
@@ -144,40 +158,45 @@ impl WorkspaceManager {
             }
         };
 
-        let managed_hwnds = self.get_all_managed_hwnds();
-        let managed_set: HashSet<isize> = managed_hwnds.iter().copied().collect();
         let unfocused_alpha: u8 = 245;
+        let mut active_windows = HashSet::new();
 
-        for hwnd_val in &managed_hwnds {
-            let hwnd = HWND(*hwnd_val as _);
-            let desired_alpha = if hwnd == focused_hwnd {
-                255
-            } else {
-                unfocused_alpha
-            };
-            let previous_alpha = self.last_window_alpha.get(hwnd_val).copied();
-
-            if hwnd == focused_hwnd {
-                if let Err(e) = set_window_border_color(hwnd, accent_color) {
-                    error!("Failed to set window border color: {}", e);
-                }
-            } else if previous_alpha != Some(desired_alpha)
-                && let Err(e) = reset_window_decorations(hwnd)
-            {
-                error!("Failed to reset window decorations: {}", e);
-            }
-
-            if previous_alpha != Some(desired_alpha) {
-                if let Err(e) = set_window_transparency(hwnd, desired_alpha) {
-                    error!("Failed to set window transparency: {}", e);
+        // Only update windows in active workspaces
+        for monitor in &self.monitors {
+            let active_workspace = &monitor.workspaces[(monitor.active_workspace - 1) as usize];
+            for window in &active_workspace.windows {
+                active_windows.insert(window.hwnd);
+                let hwnd = HWND(window.hwnd as _);
+                let desired_alpha = if hwnd == focused_hwnd {
+                    255
                 } else {
-                    self.last_window_alpha.insert(*hwnd_val, desired_alpha);
+                    unfocused_alpha
+                };
+                let previous_alpha = self.last_window_alpha.get(&window.hwnd).copied();
+
+                if hwnd == focused_hwnd {
+                    if let Err(e) = set_window_border_color(hwnd, accent_color) {
+                        error!("Failed to set window border color: {}", e);
+                    }
+                } else if previous_alpha != Some(desired_alpha)
+                    && let Err(e) = reset_window_decorations(hwnd)
+                {
+                    error!("Failed to reset window decorations: {}", e);
+                }
+
+                if previous_alpha != Some(desired_alpha) {
+                    if let Err(e) = set_window_transparency(hwnd, desired_alpha) {
+                        error!("Failed to set window transparency: {}", e);
+                    } else {
+                        self.last_window_alpha.insert(window.hwnd, desired_alpha);
+                    }
                 }
             }
         }
 
+        // Clean up alpha cache for windows no longer in active workspaces
         self.last_window_alpha
-            .retain(|hwnd, _| managed_set.contains(hwnd));
+            .retain(|hwnd, _| active_windows.contains(hwnd));
     }
 
     /// Sets the list of monitors for the workspace manager.
@@ -196,6 +215,39 @@ impl WorkspaceManager {
     /// Returns the currently active workspace number (1-9).
     pub fn get_active_workspace(&self) -> u8 {
         self.active_workspace_global
+    }
+
+    /// Gets the process name for a window, using cache if available.
+    pub fn get_process_name_cached(&mut self, hwnd: HWND) -> Option<String> {
+        let hwnd_val = hwnd.0 as isize;
+        
+        // Check cache first
+        if let Some(cached) = self.process_name_cache.get(&hwnd_val) {
+            return cached.clone();
+        }
+        
+        // Not in cache, fetch it
+        let process_name = crate::windows_lib::get_process_name_for_window(hwnd);
+        
+        // Store in cache
+        self.process_name_cache.insert(hwnd_val, process_name.clone());
+        
+        process_name
+    }
+
+    /// Rebuilds the window location HashMap for O(1) lookups.
+    fn rebuild_window_locations(&mut self) {
+        self.window_locations.clear();
+        for (monitor_idx, monitor) in self.monitors.iter().enumerate() {
+            for (workspace_idx, workspace) in monitor.workspaces.iter().enumerate() {
+                for (window_idx, window) in workspace.windows.iter().enumerate() {
+                    self.window_locations.insert(window.hwnd, (monitor_idx, workspace_idx, window_idx));
+                }
+            }
+        }
+    }
+            }
+        }
     }
 
     /// Returns all window handles managed by Megatile across all workspaces.
@@ -432,8 +484,22 @@ impl WorkspaceManager {
         Ok(())
     }
 
+    /// Marks monitors as needing re-check.
+    /// Call this when receiving display change events.
+    pub fn mark_monitors_dirty(&mut self) {
+        self.monitors_dirty = true;
+    }
+
     /// Checks if monitor configuration has changed.
+    /// Only performs check if monitors are marked dirty.
     pub fn check_monitor_changes(&mut self) -> bool {
+        // Only check if marked dirty
+        if !self.monitors_dirty {
+            return false;
+        }
+
+        self.monitors_dirty = false;
+
         let current_infos = crate::windows_lib::enumerate_monitors();
         if current_infos.len() != self.monitors.len() {
             return true;
@@ -777,11 +843,11 @@ impl WorkspaceManager {
                             monitor.workspaces[workspace_idx].windows.len(),
                             old_workspace
                         );
-                        let monitor_copy = monitor.clone();
+                        let monitor_rect = monitor.rect;
                         let workspace = &mut monitor.workspaces[workspace_idx];
                         let layout_tree = &mut workspace.layout_tree;
                         let windows = &mut workspace.windows;
-                        tiler.tile_windows(&monitor_copy, layout_tree, windows);
+                        tiler.tile_windows(monitor_rect, layout_tree, windows);
                     } else {
                         debug!(
                             "Source workspace {} is now empty, no tiling needed",
@@ -955,18 +1021,21 @@ impl WorkspaceManager {
             let workspace_idx = (monitor.active_workspace - 1) as usize;
 
             if !monitor.workspaces[workspace_idx].windows.is_empty() {
-                // Create a copy of the monitor for reading
-                let monitor_copy = monitor.clone();
+                // Pass only the monitor rect to avoid cloning the entire monitor
+                let monitor_rect = monitor.rect;
                 let workspace = &mut monitor.workspaces[workspace_idx];
                 let layout_tree = &mut workspace.layout_tree;
                 let windows = &mut workspace.windows;
-                tiler.tile_windows(&monitor_copy, layout_tree, windows);
+                tiler.tile_windows(monitor_rect, layout_tree, windows);
             }
         }
     }
 
     /// Applies calculated positions to all tiled windows.
     pub fn apply_window_positions(&mut self) {
+        // Rebuild window locations for O(1) lookup
+        self.rebuild_window_locations();
+
         // Collect windows to position first to avoid borrow checker issues
         let mut windows_to_position: Vec<(isize, RECT)> = Vec::new();
 
@@ -980,15 +1049,19 @@ impl WorkspaceManager {
             }
         }
 
-        // Update all window rects FIRST to match target positions
+        // Update all window rects FIRST to match target positions using O(1) lookup
         // This prevents update_window_positions from thinking they moved
         for (hwnd_val, target_rect) in &windows_to_position {
-            for monitor in self.monitors.iter_mut() {
-                for workspace in &mut monitor.workspaces {
-                    if let Some(window) = workspace.get_window_mut(hwnd_from_isize(*hwnd_val)) {
-                        window.rect = *target_rect;
-                        break;
-                    }
+            if let Some(&(monitor_idx, workspace_idx, window_idx)) =
+                self.window_locations.get(hwnd_val)
+            {
+                if let Some(window) = self
+                    .monitors
+                    .get_mut(monitor_idx)
+                    .and_then(|m| m.workspaces.get_mut(workspace_idx))
+                    .and_then(|ws| ws.windows.get_mut(window_idx))
+                {
+                    window.rect = *target_rect;
                 }
             }
         }
@@ -1540,27 +1613,25 @@ impl WorkspaceManager {
     /// - DWM cloaked state (UWP apps)
     /// - Invalid geometry (zero-size, off-screen)
     /// - Invalid window handles
+    ///
+    /// Only checks windows in active workspaces for performance.
     pub fn cleanup_invalid_windows(&mut self) {
         let mut invalid_windows = Vec::new();
 
-        // Find all invalid windows across all monitors and workspaces
+        // Only check windows in active workspaces per monitor
         for monitor in self.monitors.iter() {
-            for workspace in &monitor.workspaces {
-                for window in &workspace.windows {
-                    let hwnd = hwnd_from_isize(window.hwnd);
+            let active_workspace = &monitor.workspaces[(monitor.active_workspace - 1) as usize];
+            for window in &active_workspace.windows {
+                let hwnd = hwnd_from_isize(window.hwnd);
 
-                    // Check if window is still valid using comprehensive validation
-                    // Pass is_hidden_by_workspace to skip visibility check for intentionally hidden windows
-                    if !crate::windows_lib::is_window_still_valid(
-                        hwnd,
-                        window.is_hidden_by_workspace,
-                    ) {
-                        debug!(
-                            "Cleanup: found invalid window {:?} (process: {:?}, hidden_by_ws: {})",
-                            hwnd.0, window.process_name, window.is_hidden_by_workspace
-                        );
-                        invalid_windows.push(hwnd);
-                    }
+                // Check if window is still valid using comprehensive validation
+                // Pass is_hidden_by_workspace to skip visibility check for intentionally hidden windows
+                if !crate::windows_lib::is_window_still_valid(hwnd, window.is_hidden_by_workspace) {
+                    debug!(
+                        "Cleanup: found invalid window {:?} (process: {:?}, hidden_by_ws: {})",
+                        hwnd.0, window.process_name, window.is_hidden_by_workspace
+                    );
+                    invalid_windows.push(hwnd);
                 }
             }
         }

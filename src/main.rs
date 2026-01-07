@@ -648,6 +648,7 @@ fn main() {
                     }
                     WindowEvent::DisplayChange => {
                         info!("Event: Display Change");
+                        wm.mark_monitors_dirty();
                         if let Err(e) = wm.reenumerate_monitors() {
                             error!("Failed to reenumerate monitors: {}", e);
                         } else {

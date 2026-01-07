@@ -421,12 +421,6 @@ pub fn is_window_still_valid(hwnd: HWND, is_hidden_by_workspace: bool) -> bool {
             return false;
         }
 
-        // Check if the window is still visible
-        if !IsWindowVisible(hwnd).as_bool() {
-            debug!("Window {:?} is no longer valid (not visible)", hwnd.0);
-            return false;
-        }
-
         // Check if the window is minimized
         if IsIconic(hwnd).as_bool() {
             debug!("Window {:?} is no longer valid (minimized)", hwnd.0);

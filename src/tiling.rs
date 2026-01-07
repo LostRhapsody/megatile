@@ -69,18 +69,18 @@ impl DwindleTiler {
     /// Reuses the existing layout tree if possible, otherwise creates a new one.
     pub fn tile_windows(
         &self,
-        monitor: &Monitor,
+        monitor_rect: RECT,
         layout_tree: &mut Option<crate::tiling::Tile>,
         windows: &mut [Window],
     ) {
         use log::debug;
 
-        let active_workspace = monitor.get_active_workspace();
-        debug!(
-            "Tiling active workspace: {:?} on monitor with rect {:?}",
-            active_workspace, monitor.rect
-        );
-        let window_count = active_workspace.window_count();
+        // Count tiled windows
+        let window_count = windows
+            .iter()
+            .filter(|w| w.workspace > 0 && w.is_tiled)
+            .count();
+        debug!("Tiling workspace on monitor with rect {:?}", monitor_rect);
         debug!("Window count in workspace: {}", window_count);
 
         if window_count == 0 {
@@ -89,7 +89,7 @@ impl DwindleTiler {
         }
 
         // Get monitor work area (usable space)
-        let work_rect = self.get_work_area(monitor);
+        let work_rect = self.get_work_area(monitor_rect);
         debug!("Work area rect: {:?}", work_rect);
 
         // Check if we can reuse existing layout_tree
@@ -133,9 +133,9 @@ impl DwindleTiler {
     }
 
     /// Calculates the usable work area for tiling on a monitor.
-    fn get_work_area(&self, monitor: &Monitor) -> RECT {
+    fn get_work_area(&self, monitor_rect: RECT) -> RECT {
         // For now, use full monitor rect
-        let mut rect = monitor.rect;
+        let mut rect = monitor_rect;
         // Add minimal gap padding - use smaller gaps at edges for tighter layout
         let edge_gap = 2; // Minimal edge gap
         rect.left += edge_gap;
