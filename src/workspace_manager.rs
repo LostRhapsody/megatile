@@ -67,10 +67,6 @@ impl WorkspaceManager {
             process_name_cache: HashMap::new(),
         }
     }
-    }
-    }
-    }
-    }
 
     /// Sets the status bar instance for workspace indicator updates.
     pub fn set_statusbar(&mut self, statusbar: StatusBar) {
@@ -243,9 +239,6 @@ impl WorkspaceManager {
                 for (window_idx, window) in workspace.windows.iter().enumerate() {
                     self.window_locations.insert(window.hwnd, (monitor_idx, workspace_idx, window_idx));
                 }
-            }
-        }
-    }
             }
         }
     }
@@ -437,11 +430,52 @@ impl WorkspaceManager {
         false
     }
 
+    /// Restores all managed windows to visible state.
+    /// Call before any risky operation to prevent window loss.
+    fn restore_all_windows_visible(&self) {
+        for hwnd in self.get_all_managed_hwnds() {
+            let _ = show_window_in_taskbar(hwnd_from_isize(hwnd));
+        }
+    }
+
+    /// Finds monitors that no longer exist in the new configuration.
+    /// Returns indices of old monitors that are orphaned.
+    fn find_orphaned_monitor_indices(
+        &self,
+        new_infos: &[crate::windows_lib::MonitorInfo],
+    ) -> Vec<usize> {
+        self.monitors
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| !new_infos.iter().any(|info| info.hmonitor == m.hmonitor))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Re-hides windows that should be hidden due to workspace switching.
+    fn rehide_inactive_workspace_windows(&self) {
+        let active = self.active_workspace_global;
+        for monitor in &self.monitors {
+            for (ws_idx, workspace) in monitor.workspaces.iter().enumerate() {
+                let ws_num = (ws_idx + 1) as u8;
+                for window in &workspace.windows {
+                    let hwnd = hwnd_from_isize(window.hwnd);
+                    if ws_num == active {
+                        let _ = show_window_in_taskbar(hwnd);
+                    } else {
+                        let _ = hide_window_from_taskbar(hwnd);
+                    }
+                }
+            }
+        }
+    }
+
     /// Re-enumerates monitors and updates workspace assignments.
     ///
     /// Called when monitor configuration changes (hot-plug, resolution change).
+    /// Handles window migration when monitors are disconnected.
     pub fn reenumerate_monitors(&mut self) -> Result<(), String> {
-        // Prevent redundant re-enumerations within 500ms
+        // Debounce rapid calls
         if self.last_reenumerate.elapsed() < Duration::from_millis(500) {
             return Ok(());
         }
@@ -449,36 +483,92 @@ impl WorkspaceManager {
 
         info!("Re-enumerating monitors...");
 
-        // Get current monitor info
-        let monitor_infos = crate::windows_lib::enumerate_monitors();
-        info!("Found {} monitor(s)", monitor_infos.len());
+        // PHASE 1: Safety - restore all windows to visible
+        self.restore_all_windows_visible();
 
+        // Get new monitor configuration
+        let new_infos = crate::windows_lib::enumerate_monitors();
+        info!(
+            "Found {} monitor(s) (was {})",
+            new_infos.len(),
+            self.monitors.len()
+        );
+
+        if new_infos.is_empty() {
+            warn!("No monitors detected, skipping reconfiguration");
+            return Ok(());
+        }
+
+        // PHASE 2: Detect orphaned monitors
+        let orphaned_indices = self.find_orphaned_monitor_indices(&new_infos);
+
+        // PHASE 3: Collect orphaned windows and determine migration targets
+        let mut orphaned_windows: Vec<Window> = Vec::new();
+        for &idx in &orphaned_indices {
+            if let Some(monitor) = self.monitors.get(idx) {
+                for workspace in &monitor.workspaces {
+                    orphaned_windows.extend(workspace.windows.iter().cloned());
+                }
+            }
+        }
+        info!("Found {} orphaned windows to migrate", orphaned_windows.len());
+
+        // PHASE 4: Build new monitor list
         let mut new_monitors: Vec<Monitor> = Vec::new();
-
-        for (i, info) in monitor_infos.iter().enumerate() {
-            debug!("Monitor {}: {:?}", i, info.rect);
-
-            // Try to preserve workspace data from existing monitor by matching hmonitor
-            let existing_workspace_data = if let Some(old_monitor) =
-                self.monitors.iter().find(|m| m.hmonitor == info.hmonitor)
-            {
-                old_monitor.workspaces.clone()
-            } else {
-                std::array::from_fn(|_| crate::workspace::Workspace::new())
-            };
+        for info in &new_infos {
+            // Try to preserve workspace data from matching monitor
+            let workspaces =
+                if let Some(old) = self.monitors.iter().find(|m| m.hmonitor == info.hmonitor) {
+                    old.workspaces.clone()
+                } else {
+                    std::array::from_fn(|_| crate::workspace::Workspace::new())
+                };
 
             let mut monitor = Monitor::new(info.hmonitor, info.rect);
-            monitor.workspaces = existing_workspace_data;
+            monitor.workspaces = workspaces;
             monitor.active_workspace = self.active_workspace_global;
             new_monitors.push(monitor);
         }
 
-        // Update monitors
+        // PHASE 5: Distribute orphaned windows round-robin
+        if !orphaned_windows.is_empty() && !new_monitors.is_empty() {
+            for (i, mut window) in orphaned_windows.into_iter().enumerate() {
+                let target_monitor_idx = i % new_monitors.len();
+                window.monitor = target_monitor_idx;
+                // Reset tiling state for fresh layout
+                window.is_tiled = true;
+
+                if let Some(workspace) =
+                    new_monitors[target_monitor_idx].get_workspace_mut(window.workspace)
+                {
+                    workspace.layout_tree = None; // Force layout recalculation
+                    workspace.windows.push(window);
+                }
+            }
+        }
+
+        // PHASE 6: Finalize
         self.monitors = new_monitors;
 
-        // Re-tile active workspace on all monitors
+        // Clear all layout trees to force fresh calculation
+        for monitor in &mut self.monitors {
+            for workspace in &mut monitor.workspaces {
+                workspace.layout_tree = None;
+            }
+        }
+
+        // Re-tile and apply positions
         self.tile_active_workspaces();
         self.apply_window_positions();
+
+        // Re-hide windows on non-active workspaces
+        self.rehide_inactive_workspace_windows();
+
+        // Rebuild lookup cache
+        self.rebuild_window_locations();
+
+        // Recenter statusbar on primary monitor
+        self.recenter_statusbar();
 
         info!("Monitor re-enumeration complete");
         Ok(())
